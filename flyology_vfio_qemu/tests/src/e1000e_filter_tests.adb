@@ -147,6 +147,12 @@ begin
 
                Mine : NIC.MAC_Address;
 
+               --  Which slot the last arrival used. The frame does not land
+               --  in slot zero — by this point several have come and gone —
+               --  so a fixed overlay reads a buffer belonging to some
+               --  earlier frame, and a check on its contents passes or
+               --  fails on the wrong bytes.
+               Arrived_Slot : Natural := 0;
                RX_Slot : Natural := 0;
                TX_Slot : Natural := 0;
 
@@ -308,6 +314,7 @@ begin
                   end loop;
 
                   if Seen.Arrived then
+                     Arrived_Slot := RX_Slot;
                      NIC.Recycle_Received
                        (BAR, RX, RX_Slot,
                         At_Device (Buffers_Offset
@@ -617,7 +624,9 @@ begin
                        Try (Length, Options);
                      Landed : array (0 .. Buffer_Bytes - 1) of U8
                        with Import, Volatile,
-                       Address => At_Host (Buffers_Offset);
+                       Address => At_Host
+                         (Buffers_Offset
+                          + DMA.Byte_Count (Arrived_Slot * Buffer_Bytes));
                      Filled : U16 := 0;
                   begin
                      if not Seen.Arrived then

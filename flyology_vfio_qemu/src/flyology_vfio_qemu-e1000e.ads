@@ -30,11 +30,19 @@ use type Interfaces.Unsigned_32;
 --  reading plausible-looking rubbish fails that; a self-consistency check
 --  would not.
 --
---  What is deliberately not here: everything above a single frame. There is
---  no checksum or segmentation offload, no receive-side scaling, no VLAN
---  or multicast filtering, no flow control, and no interrupt-driven
---  receive — the rings are polled. Those are a network driver, and this is
---  a harness.
+--  What is deliberately not here has shrunk, and the list has to shrink
+--  with it or it stops being a boundary and becomes decoration. Checksum
+--  and segmentation offload, receive-side scaling, VLAN and multicast
+--  filtering and flow control were all once on this list and are now in
+--  this package, because each turned out to be a way of asking the device
+--  a question the layers below could get wrong.
+--
+--  What is still absent is everything that would make this a driver rather
+--  than a way of interrogating one: completions are polled and never
+--  interrupt-driven, buffers and rings have no lifecycle beyond the scope
+--  that declared them, nothing here is safe to call from two tasks, and
+--  no error is recoverable — a device that misbehaves raises and the run
+--  ends. Those are not omissions of detail. They are the difference.
 package Flyology_VFIO_QEMU.E1000E is
 
    package Regions renames Flyology_VFIO.Regions;
@@ -529,8 +537,13 @@ package Flyology_VFIO_QEMU.E1000E is
 
    --  How full the receive buffer must get before a pause is sent, and how
    --  empty before the sender is released.
-   Flow_Control_High_Water : constant := 16#02160#;
-   Flow_Control_Low_Water  : constant := 16#02168#;
+   --  Note which is which. The lower address is the lower threshold, which
+   --  reads as an ordering and is a coincidence: a reader who assumes the
+   --  high-water mark comes first names both backwards, and the device then
+   --  holds the sender off an empty buffer and releases it into a full one.
+   --  Nothing reads back wrong, because both names are wrong together.
+   Flow_Control_Low_Water  : constant := 16#02160#;
+   Flow_Control_High_Water : constant := 16#02168#;
 
    ---------------------------------------------------------------------
    --  Agreeing a link speed

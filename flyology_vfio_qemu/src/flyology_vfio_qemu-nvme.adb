@@ -1054,11 +1054,14 @@ package body Flyology_VFIO_QEMU.NVMe is
       Bytes          : Natural := 0;
       Directive      : Directive_Kind := Directive_Identify;
       Operation      : Directive_Operation := Directive_Enable;
-      Specific       : U16 := 0)
+      Specific       : U16 := 0;
+      Enable         : Enable_Directive := No_Directive_Change)
    is
       Words : constant U32 :=
         (if Bytes = 0 then 0 else U32 (Bytes / 4) - 1);
    begin
+      --  The type to switch goes in bits fifteen to eight of the twelfth
+      --  word and the switch itself in its lowest bit.
       Write_Admin_Command
         (Submission, Slot, Opcode_Directive_Send, Identifier,
          Namespace => Namespace,
@@ -1066,7 +1069,11 @@ package body Flyology_VFIO_QEMU.NVMe is
          CDW10 => Words,
          CDW11 => U32 (Operation)
                   or Interfaces.Shift_Left (U32 (Directive), 8)
-                  or Interfaces.Shift_Left (U32 (Specific), 16));
+                  or Interfaces.Shift_Left (U32 (Specific), 16),
+         CDW12 =>
+           (if not Enable.Meant then 0
+            else Interfaces.Shift_Left (U32 (Enable.Kind), 8)
+                 or (if Enable.Switched_On then 1 else 0)));
    end Write_Directive_Send_Command;
 
    -------------------------------

@@ -464,14 +464,17 @@ begin
 
                         if Streams_First then
                            --  Switching a directive on goes through the
-                           --  identify directive: which one in the low byte
-                           --  of the specific word, and whether to switch it
-                           --  on in the next.
+                           --  identify directive, and the word that says
+                           --  which and whether is the twelfth — not the
+                           --  directive-specific field of the eleventh,
+                           --  where it looks like it belongs and where a
+                           --  controller reads it as a stream number.
                            Controller.Write_Directive_Send_Command
                              (Admin_Sub, Admin_Slot, Next_ID, Namespace,
-                              Specific =>
-                                U16 (Controller.Directive_Streams)
-                                or 16#0100#);
+                              Enable =>
+                                (Kind        => Controller.Directive_Streams,
+                                 Switched_On => True,
+                                 Meant       => True));
                            declare
                               Sent : constant Controller.Completion :=
                                 Run_Admin;

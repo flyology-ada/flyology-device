@@ -531,7 +531,11 @@ package body Flyology_VFIO_QEMU.E1000E is
             Errors   => Get_8 (Ring.Host, At_Offset + 11),
             Status   => Extended_Status,
             VLAN_Tag => Get_16 (Ring.Host, At_Offset + 14),
-            Checksum => Get_16 (Ring.Host, At_Offset + 4));
+            --  The second word holds the IP identification and then the
+            --  checksum, so the checksum is its upper half. Reading the
+            --  lower half returns the identification, which is a plausible
+            --  number and never the right one.
+            Checksum => Get_16 (Ring.Host, At_Offset + 6));
       end;
    end Peek_Received;
 

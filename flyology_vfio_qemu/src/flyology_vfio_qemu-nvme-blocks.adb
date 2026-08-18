@@ -42,11 +42,15 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
       Ring_Submission_Doorbell
         (BAR, Self.Stride, Admin_Queue,
          (Self.Admin_Slot + 1) mod Queue_Entries);
-      Answer := Await_Completion (Self.Admin_Comp, Self.Admin_Slot, True);
+      Answer := Await_Completion
+        (Self.Admin_Comp, Self.Admin_Slot, Self.Admin_Phase);
       Ring_Completion_Doorbell
         (BAR, Self.Stride, Admin_Queue,
          (Self.Admin_Slot + 1) mod Queue_Entries);
-      Self.Admin_Slot := Self.Admin_Slot + 1;
+      Self.Admin_Slot := (Self.Admin_Slot + 1) mod Queue_Entries;
+      if Self.Admin_Slot = 0 then
+         Self.Admin_Phase := not Self.Admin_Phase;
+      end if;
       Self.Next_ID := Self.Next_ID + 1;
       Self.Status := Answer.Status;
       return Answer;
@@ -63,10 +67,13 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
    begin
       Ring_Submission_Doorbell
         (BAR, Self.Stride, IO_Queue, (Self.IO_Slot + 1) mod Queue_Entries);
-      Answer := Await_Completion (Self.IO_Comp, Self.IO_Slot, True);
+      Answer := Await_Completion (Self.IO_Comp, Self.IO_Slot, Self.IO_Phase);
       Ring_Completion_Doorbell
         (BAR, Self.Stride, IO_Queue, (Self.IO_Slot + 1) mod Queue_Entries);
-      Self.IO_Slot := Self.IO_Slot + 1;
+      Self.IO_Slot := (Self.IO_Slot + 1) mod Queue_Entries;
+      if Self.IO_Slot = 0 then
+         Self.IO_Phase := not Self.IO_Phase;
+      end if;
       Self.Next_ID := Self.Next_ID + 1;
       Self.Status := Answer.Status;
       return Answer;
@@ -145,7 +152,9 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
       Self.Stride := Doorbell_Stride (Capabilities);
       Self.Page_Bytes := Minimum_Page_Size (Capabilities);
       Self.Admin_Slot := 0;
+      Self.Admin_Phase := True;
       Self.IO_Slot := 0;
+      Self.IO_Phase := True;
       Self.Next_ID := 1;
       Self.Status := 0;
 

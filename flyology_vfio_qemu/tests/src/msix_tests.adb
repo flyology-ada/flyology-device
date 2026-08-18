@@ -269,10 +269,19 @@ begin
                      --  This is not a quirk of the emulator. It is why a
                      --  real driver gives its admin queue a vector of its
                      --  own and does not share it with an I/O queue.
+                     --  Drained until it goes quiet rather than taken
+                     --  once. A completion and its interrupt are separate
+                     --  events: the loop above finished when it saw the
+                     --  entry in memory, so one Take collects what had
+                     --  arrived by then and leaves the last one in flight,
+                     --  to be mistaken later for a signal from the I/O
+                     --  queue.
                      declare
-                        From_Admin : constant Interfaces.Unsigned_64 :=
-                          IRQ.Take (Vector_0);
+                        From_Admin : Interfaces.Unsigned_64 := 0;
                      begin
+                        while Waiting.Wait_For (Vector_0, 0.05) loop
+                           From_Admin := From_Admin + IRQ.Take (Vector_0);
+                        end loop;
                         Harness.Check
                           (From_Admin > 0,
                            "the admin queue signalled vector zero while it"

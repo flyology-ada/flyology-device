@@ -91,6 +91,11 @@ procedure NVMe_Coverage_Tests is
    --  The status a controller returns for a command it does not have.
    Invalid_Opcode : constant U16 := 16#01#;
 
+   --  What the probe returns for a command that never answered at all.
+   --  Not a status any controller produces: a real one fits in eleven
+   --  bits, so this cannot be mistaken for one.
+   Stall_Status : constant U16 := 16#FFFF#;
+
    --  A command with a name, so the report reads as a command set rather
    --  than as a column of numbers.
    --  The opcode is kept as a plain byte here because a report has to
@@ -305,7 +310,7 @@ begin
                   exception
                      when Device_Misbehaved =>
                         Stalled := True;
-                        return (Identifier => 0, Status => 16#FFFF#,
+                        return (Identifier => 0, Status => Stall_Status,
                                 Phase => Phase);
                   end;
                   Controller.Ring_Completion_Doorbell
@@ -379,8 +384,13 @@ begin
                         CDW10 => 0);
                      declare
                         Answer  : constant Controller.Completion := Run;
+                        --  A command that never answered is not evidence
+                          --  that the opcode exists. Counting the stall as
+                          --  present inflates the tally and props up the
+                          --  floor beneath it.
                         Present : constant Boolean :=
-                          Answer.Status /= Invalid_Opcode
+                          Answer.Status /= Stall_Status
+                          and then Answer.Status /= Invalid_Opcode
                           and then (Answer.Status and 16#7FF#)
                                    /= Invalid_Opcode;
                         Covered : constant Boolean :=
@@ -494,7 +504,9 @@ begin
                      declare
                         Answer  : constant Controller.Completion := Run_IO;
                         Present : constant Boolean :=
-                          (Answer.Status and 16#7FF#) /= Invalid_Opcode;
+                          Answer.Status /= Stall_Status
+                          and then (Answer.Status and 16#7FF#)
+                                   /= Invalid_Opcode;
                         Covered : constant Boolean :=
                           Is_Exercised
                             (Controller.IO_Opcode (Command.Opcode),

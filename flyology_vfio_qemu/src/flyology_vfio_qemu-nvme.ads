@@ -35,11 +35,16 @@ with System;
 --  reports itself.
 --
 --  What is deliberately not here: everything a storage driver would need
---  and a harness does not. There is no namespace management, no more than
---  one queue pair, no interrupt-driven completion — the queues are polled —
---  and no attempt to be fast. Flyology_VFIO_QEMU.NVMe exists to make the
---  layers below it prove themselves, not to store anything anyone wants
---  back.
+--  and a harness does not. Completions are polled rather than announced by
+--  interrupt; a queue is whatever the caller built and nothing manages its
+--  lifetime; nothing here is safe to call from two tasks; and a controller
+--  that misbehaves raises rather than being recovered from. This package
+--  exists to make the layers below it prove themselves, not to store
+--  anything anyone wants back.
+--
+--  It does now create queue pairs beyond the first, bind them to interrupt
+--  vectors, and manage namespaces — those were on the absent list until
+--  the interesting failures turned out to live in them.
 package Flyology_VFIO_QEMU.NVMe is
 
    package DMA renames Flyology_DMA;
@@ -317,6 +322,7 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @param CDW10 Command word ten
    --  @param CDW11 Command word eleven
    --  @param CDW12 Command word twelve
+   --  @param CDW13 Command word thirteen
    procedure Write_Admin_Command
      (Submission : Queue_Location;
       Slot       : Natural;
@@ -343,6 +349,7 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @param CDW10 Command word ten
    --  @param CDW11 Command word eleven
    --  @param CDW12 Command word twelve
+   --  @param CDW13 Command word thirteen
    procedure Write_IO_Command
      (Submission : Queue_Location;
       Slot       : Natural;
@@ -618,6 +625,28 @@ package Flyology_VFIO_QEMU.NVMe is
    --  things in a Send and a Receive.
    type Directive_Operation is new U8;
 
+   --  Which directive to switch on or off through the identify directive.
+   --
+   --  This goes in the twelfth command word and not, as it looks like it
+   --  should, in the directive-specific field of the eleventh. The eleventh
+   --  carries a value the directive itself defines — a stream identifier,
+   --  say — and putting the enable there sets a stream number instead,
+   --  which a controller either refuses or quietly obeys.
+   --
+   --  @field Kind Which directive to change
+   --  @field Switched_On Whether to turn it on
+   --  @field Meant Whether this word means anything at all
+   type Enable_Directive is record
+      Kind        : Directive_Kind := 0;
+      Switched_On : Boolean := False;
+      Meant       : Boolean := False;
+   end record;
+
+   --  Says the twelfth word carries nothing, for the operations that do
+   --  not take one.
+   No_Directive_Change : constant Enable_Directive :=
+     (Kind => 0, Switched_On => False, Meant => False);
+
    --  Receive, identify directive: report what is supported and enabled.
    Directive_Return_Parameters : constant Directive_Operation := 16#01#;
 
@@ -661,9 +690,9 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @param Bytes How many bytes the buffer holds, or zero for none
    --  @param Directive Which directive to change
    --  @param Operation Which operation of it to perform
-   --  @param Specific The directive-specific word: for enabling through the
-   --    identify directive, the directive to switch in the low byte and
-   --    whether to switch it on in the next
+   --  @param Specific The directive-specific word, which for streams is a
+   --    stream identifier and for the identify directive means nothing
+   --  @param Enable Which directive to switch on or off, and whether
    procedure Write_Directive_Send_Command
      (Submission     : Queue_Location;
       Slot           : Natural;
@@ -673,7 +702,8 @@ package Flyology_VFIO_QEMU.NVMe is
       Bytes          : Natural := 0;
       Directive      : Directive_Kind := Directive_Identify;
       Operation      : Directive_Operation := Directive_Enable;
-      Specific       : U16 := 0)
+      Specific       : U16 := 0;
+      Enable         : Enable_Directive := No_Directive_Change)
      with Pre => Submission.Kind = Admin and then Bytes mod 4 = 0;
 
    --  Which directives a controller says it supports.
@@ -781,10 +811,16 @@ package Flyology_VFIO_QEMU.NVMe is
    Feature_Interrupt_Coalescing : constant Feature_Identifier := 16#08#;
 
    --  Feature: how the controller arbitrates between submission queues.
-   Feature_Arbitration : constant Feature_Identifier := 16#00#;
+   --
+   --  Note the number. Identifier zero is reserved, so the list starts at
+   --  one and every feature sits one above where a reader counting from
+   --  zero puts it. Getting this wrong on the first two is quiet: a Get of
+   --  identifier zero is refused, but a Get of one when two was meant
+   --  succeeds and answers about a different feature entirely.
+   Feature_Arbitration : constant Feature_Identifier := 16#01#;
 
    --  Feature: the controller's power state.
-   Feature_Power_Management : constant Feature_Identifier := 16#01#;
+   Feature_Power_Management : constant Feature_Identifier := 16#02#;
 
    --  Feature: which asynchronous events the controller may report.
    Feature_Async_Event_Configuration : constant Feature_Identifier := 16#0B#;
@@ -995,8 +1031,8 @@ package Flyology_VFIO_QEMU.NVMe is
    --  Writes a command reading or writing blocks.
    --
    --  One data pointer covers a transfer up to a page; a second covers the
-   --  page after it. Anything larger needs a list, which this harness has
-   --  no reason to build.
+   --  page after it. Anything larger needs a page list, which
+   --  Describe_Transfer below builds and this parameter then carries.
    --
    --  @param Submission Where the I/O submission queue lives
    --  @param Slot Which entry to write, from zero
@@ -1006,6 +1042,9 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @param First_Block The first logical block
    --  @param Blocks How many blocks, counted from one
    --  @param Address Where the data lives, as a device address
+   --  @param Continuation The second data pointer: unused for a transfer
+   --    inside one page, the next page for one inside two, and a page list
+   --    beyond that
    procedure Write_Block_Command
      (Submission   : Queue_Location;
       Slot         : Natural;

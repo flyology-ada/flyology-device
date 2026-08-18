@@ -209,6 +209,14 @@ private
    --  Sixteen entries is a queue small enough to fit a page several times
    --  over and deep enough that the slot arithmetic wraps during an
    --  ordinary run rather than only in a test written to make it.
+   --
+   --  That was written before the arithmetic wrapped. It did not: the
+   --  doorbell was reduced modulo this number and the slot itself was not,
+   --  so the seventeenth command on a queue was written past the end of
+   --  the ring while the doorbell told the controller the tail had come
+   --  round to zero — where a stale command was still sitting, and was run
+   --  again. Both of this crate's block tests sat one or two commands
+   --  under that, which is why nothing here ever showed it.
    Queue_Entries : constant := 16;
 
    IO_Queue : constant Queue_Identifier := 1;
@@ -230,8 +238,19 @@ private
       Buffer_Host  : System.Address := System.Null_Address;
       Buffer_At    : U64 := 0;
       Buffer_Bytes : Positive := 4096;
+      --  Each queue's next slot, kept inside the ring, and the phase bit
+      --  its next completion will carry.
+      --
+      --  The controller never clears a completion entry; it flips one bit
+      --  each time it comes round again, and a reader that expects the
+      --  same value for ever accepts the previous lap's completion as this
+      --  lap's. So the phase inverts whenever the slot returns to zero,
+      --  and both queues carry their own because they wrap at their own
+      --  rates.
       Admin_Slot   : Natural := 0;
+      Admin_Phase  : Boolean := True;
       IO_Slot      : Natural := 0;
+      IO_Phase     : Boolean := True;
       Next_ID      : U16 := 1;
       Status       : U16 := 0;
       Serial_Text  : String (1 .. 20) := [others => ' '];

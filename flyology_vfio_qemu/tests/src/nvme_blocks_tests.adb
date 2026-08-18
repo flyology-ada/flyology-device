@@ -282,6 +282,78 @@ begin
                end;
 
                ------------------------------------------------------
+               --  More commands than the queue has slots
+               ------------------------------------------------------
+
+               --  Every other check here stops one or two commands short of
+               --  a lap, which is how a queue that never wrapped passed all
+               --  of them. Past the end of the ring a submission is written
+               --  outside it while the doorbell says the tail has come round
+               --  to zero, so the controller runs whatever is still sitting
+               --  in slot zero — a stale write, at a block chosen sixteen
+               --  commands ago. Nothing reports it. The read below is what
+               --  reports it.
+               declare
+                  Laps      : constant := 3;
+                  Per_Lap   : constant := 16;
+                  Total     : constant := Laps * Per_Lap;
+                  Home      : constant U64 := Start_Block + 512;
+                  One_Block : Payload (0 .. Volume.Block_Bytes - 1);
+                  Read_Back : Payload (0 .. Volume.Block_Bytes - 1);
+                  Intact    : Boolean := True;
+               begin
+                  for Round in 1 .. Total loop
+                     for Index in One_Block'Range loop
+                        One_Block (Index) := U8 ((Round * 37 + Index) mod 251);
+                     end loop;
+                     Disk.Write (Volume, BAR, Home,
+                                 Disk.Byte_Sequence (One_Block));
+                  end loop;
+
+                  Disk.Read (Volume, BAR, Home,
+                             Disk.Byte_Sequence (Read_Back));
+                  for Index in Read_Back'Range loop
+                     if Read_Back (Index)
+                       /= U8 ((Total * 37 + Index) mod 251)
+                     then
+                        Intact := False;
+                     end if;
+                  end loop;
+
+                  Harness.Check
+                    (Intact,
+                     "after" & Natural'Image (Total) & " writes to one"
+                     & " block — three times round a sixteen-entry queue —"
+                     & " the block holds what the last of them wrote, so"
+                     & " the slot arithmetic came round rather than running"
+                     & " off the end, and no earlier command was run a"
+                     & " second time");
+
+                  --  The blocks the earlier checks wrote are still where
+                  --  they were: a re-run stale command would have landed on
+                  --  one of them.
+                  declare
+                     Neighbour : Payload (0 .. Volume.Block_Bytes - 1);
+                     Untouched : Boolean := True;
+                  begin
+                     Disk.Read (Volume, BAR, Start_Block + 4,
+                                Disk.Byte_Sequence (Neighbour));
+                     for Index in Neighbour'Range loop
+                        if Neighbour (Index)
+                          /= Pattern (4 * Volume.Block_Bytes + Index)
+                        then
+                           Untouched := False;
+                        end if;
+                     end loop;
+                     Harness.Check
+                       (Untouched,
+                        "and a block written long before those laps still"
+                        & " holds what it held, so nothing was replayed"
+                        & " into it");
+                  end;
+               end;
+
+               ------------------------------------------------------
                --  Giving blocks up
                ------------------------------------------------------
 
@@ -300,32 +372,38 @@ begin
                   Ragged : Payload (0 .. Volume.Block_Bytes);
                   Refused : Boolean := False;
                begin
-                  Disk.Read (Volume, BAR, Start_Block,
-                             Disk.Byte_Sequence (Ragged));
-               exception
-                  when Device_Misbehaved =>
-                     Refused := True;
-                     Harness.Check
-                       (Refused,
-                        "a read of one byte more than a block is refused"
-                        & " rather than rounded to something the caller did"
-                        & " not ask for");
+                  --  Recorded outside the handler, not in it. A check that
+                  --  only runs when the exception fires is not a check:
+                  --  take the refusal away and no check runs at all, the
+                  --  tally is one shorter, and the suite still passes.
+                  begin
+                     Disk.Read (Volume, BAR, Start_Block,
+                                Disk.Byte_Sequence (Ragged));
+                  exception
+                     when Device_Misbehaved => Refused := True;
+                  end;
+                  Harness.Check
+                    (Refused,
+                     "a read of one byte more than a block is refused"
+                     & " rather than rounded to something the caller did"
+                     & " not ask for");
                end;
 
                declare
                   Beyond : Payload (0 .. Volume.Block_Bytes - 1);
                   Refused : Boolean := False;
                begin
-                  Disk.Read (Volume, BAR, Volume.Block_Count,
-                             Disk.Byte_Sequence (Beyond));
-               exception
-                  when Device_Misbehaved =>
-                     Refused := True;
-                     Harness.Check
-                       (Refused,
-                        "and a read starting past the last block is refused"
-                        & " here rather than sent for the controller to"
-                        & " refuse");
+                  begin
+                     Disk.Read (Volume, BAR, Volume.Block_Count,
+                                Disk.Byte_Sequence (Beyond));
+                  exception
+                     when Device_Misbehaved => Refused := True;
+                  end;
+                  Harness.Check
+                    (Refused,
+                     "and a read starting past the last block is refused"
+                     & " here rather than sent for the controller to"
+                     & " refuse");
                end;
 
                Disk.Close (Volume, BAR);
