@@ -65,6 +65,12 @@ vm_pidfile="$state/qemu.pid"
 #  MAC and serial number are fixed rather than left to default, because the
 #  tests read them back out of the devices and compare. A value chosen here
 #  and recovered through MMIO is worth more than a self-consistency check.
+#
+#  The Intel controller gets a network backend of its own. That backend is
+#  what makes a frame test possible: QEMU's user networking answers address
+#  resolution for its gateway, so a driver that transmits a request and
+#  receives the reply has demonstrated both directions of a working ring
+#  rather than just a register that accepted a write.
 device_mac=${FLYOLOGY_DEVICE_VM_MAC:-52:54:00:12:34:56}
 device_serial=${FLYOLOGY_DEVICE_VM_NVME_SERIAL:-flyology0001}
 
@@ -74,7 +80,8 @@ devices=${FLYOLOGY_DEVICE_VM_DEVICES:-"
   -device pci-testdev
   -drive id=nvmedisk,file=$state/nvme.qcow2,if=none,format=qcow2
   -device nvme,drive=nvmedisk,serial=$device_serial,msix_qsize=8
-  -device e1000e,mac=$device_mac,romfile=
+  -netdev user,id=nic1,net=10.0.2.0/24,host=10.0.2.2
+  -device e1000e,netdev=nic1,mac=$device_mac,romfile=
 "}
 
 is_running () {

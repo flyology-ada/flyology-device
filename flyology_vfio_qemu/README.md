@@ -27,26 +27,61 @@ tries to use it.
 | --- | --- | --- |
 | `edu` ×2 | `1234:11e8` | BAR mapping, MMIO of every width, ordered accesses, a computation with a completion flag, a DMA engine that follows an IOVA, interrupt delivery over eventfd. Two of them, in separate IOMMU groups, so a container holding more than one group can be tested |
 | `pci-testdev` | `1b36:0005` | An MMIO BAR and, usefully, an I/O port region VFIO reports as unmappable, so the refusal path meets a real kernel refusal |
-| `nvme` | `1b36:0010` | A 64-bit BAR, 64-bit registers, a doorbell at a stride the device itself reports, eight MSI-X vectors, a region carrying a capability chain, and a controller that reaches memory by DMA through three separately programmed addresses |
-| `e1000e` | `8086:10d3` | Four regions on one device — MMIO, flash, an unmappable I/O window, and an MSI-X region with a capability chain — five MSI-X vectors, and a reset the device completes itself |
+| `nvme` | `1b36:0010` | A 64-bit BAR, 64-bit registers, a doorbell at a stride the device reports itself, eight MSI-X vectors, a region carrying a capability chain — and a controller driven far enough to create I/O queues and write and read actual blocks |
+| `e1000e` | `8086:10d3` | Four regions on one device — MMIO, flash, an unmappable I/O window, and an MSI-X region with a capability chain — five MSI-X vectors, a reset the device completes itself, and descriptor rings carrying a real frame out and a real reply back |
 
 `ivshmem` would have been another. QEMU 10.2 has no ivshmem device at all —
 it was deprecated upstream and dropped. The crate is arranged so another
 device is a new child package and a new test program, nothing more.
 
-## Corpora
+## What the devices are actually made to do
 
-Two of the tests check values chosen outside the program, which is worth
-more than any self-consistency check: a register window reading plausible
-rubbish fails them, and a mistake that happens to be internally consistent
-cannot pass.
+The two larger devices are driven to the point of doing their job, because
+a device that only answers register reads exercises far less than one doing
+real work. Everything below is memory the device reaches by DMA through
+addresses this code programmed into the IOMMU.
+
+**The NVMe controller is brought up and used as a disk.** It is disabled,
+its admin queues are pointed at mapped memory, and it is enabled — at which
+point it reads its submission queue, writes its completion queue and writes
+four kibibytes of Identify data, all by DMA. Then it is asked to describe
+its namespace, an I/O queue pair is created, and blocks are written and read
+back:
+
+- a buffer written to block zero and read back byte for byte;
+- a different pattern written at a later block, read back, and block zero
+  re-read to confirm the second write went where it was told;
+- a read past the end of the namespace, which must be refused with a status
+  rather than quietly accepted;
+- the queue pair removed again, submission queue first, because a
+  completion queue still serving one cannot be deleted.
+
+**The Intel controller is brought up and used as a network interface.**
+Receive and transmit descriptor rings are built in mapped memory, the rings
+are handed to the device, the link is brought up, and an address resolution
+request for the gateway is transmitted. QEMU's user networking answers it,
+and the reply is checked: that it is a reply rather than a request, that it
+is addressed to the hardware address the device reported, and that it
+answers for the address that was asked about. The device's own counters are
+then read to confirm it agrees one frame went each way — and read again to
+confirm they clear on reading, which is why such a register must never be
+read-modify-written.
+
+## Corpora chosen outside the program
+
+Some checks compare against values this program cannot have invented, which
+is worth more than any self-consistency check: a register window reading
+plausible rubbish fails them, and a mistake that is merely internally
+consistent cannot pass.
 
 - The NVMe controller's **serial number** is set on the command line that
   starts the guest, and arrives here inside four kibibytes the controller
-  wrote by DMA into memory the IOMMU was programmed for. Every address in
-  that path has to be right for the string to appear.
+  wrote by DMA. Every address in that path has to be right for the string
+  to appear.
 - The Intel controller's **MAC address** is likewise set on the command
-  line, and is read straight back out of its receive address registers.
+  line, is read back out of the receive address registers, and appears
+  again as the destination of a reply produced by a network stack outside
+  the guest.
 
 Both are passed into the guest by `scripts/qemu/test.sh` rather than
 hard-coded in the tests, so the harness and the tests cannot disagree about
@@ -115,7 +150,7 @@ error anywhere. `flyology_vfio` had no unmask operation at all; it now has
 
 All five suites pass in the repository's virtual machine against an
 emulated SMMUv3: `edu_tests` at 29 checks, `container_sharing_tests` at 18,
-`pci_testdev_tests` at 10, `nvme_tests` at 20, and `e1000e_tests` at 15.
+`pci_testdev_tests` at 10, `nvme_tests` at 37, and `e1000e_tests` at 30.
 
 ## Licence
 

@@ -1,6 +1,7 @@
 with Flyology_DMA;
 with Flyology_VFIO.Regions;
 with Interfaces;
+use type Interfaces.Unsigned_8;
 use type Interfaces.Unsigned_16;
 use type Interfaces.Unsigned_32;
 use type Interfaces.Unsigned_64;
@@ -185,6 +186,63 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @return True when the ready bit is set
    function Is_Ready (BAR : Regions.Window) return Boolean;
 
+   --  Writes an arbitrary command into a submission queue slot.
+   --
+   --  Every command below is built on this. The parameter names are the
+   --  specification's, because a reader checking this against the
+   --  specification should not have to translate: DPTR is the data pointer,
+   --  and CDW10 upwards are the command-specific words whose meaning
+   --  depends entirely on the opcode.
+   --
+   --  @param Submission Where the submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Opcode Which command
+   --  @param Identifier The command identifier, echoed in the completion
+   --  @param Namespace Which namespace, or zero where none applies
+   --  @param DPTR1 First data pointer, a device address
+   --  @param DPTR2 Second data pointer, a device address
+   --  @param CDW10 Command word ten
+   --  @param CDW11 Command word eleven
+   --  @param CDW12 Command word twelve
+   procedure Write_Command
+     (Submission : Queue_Location;
+      Slot       : Natural;
+      Opcode     : U8;
+      Identifier : U16;
+      Namespace  : U32 := 0;
+      DPTR1      : U64 := 0;
+      DPTR2      : U64 := 0;
+      CDW10      : U32 := 0;
+      CDW11      : U32 := 0;
+      CDW12      : U32 := 0);
+
+   --  Admin opcode: describe the controller or a namespace.
+   Opcode_Identify : constant U8 := 16#06#;
+
+   --  Admin opcode: create an I/O submission queue.
+   Opcode_Create_Submission_Queue : constant U8 := 16#01#;
+
+   --  Admin opcode: create an I/O completion queue.
+   Opcode_Create_Completion_Queue : constant U8 := 16#05#;
+
+   --  Admin opcode: remove an I/O submission queue.
+   Opcode_Delete_Submission_Queue : constant U8 := 16#00#;
+
+   --  Admin opcode: remove an I/O completion queue.
+   Opcode_Delete_Completion_Queue : constant U8 := 16#04#;
+
+   --  I/O opcode: write blocks.
+   Opcode_Write : constant U8 := 16#01#;
+
+   --  I/O opcode: read blocks.
+   Opcode_Read : constant U8 := 16#02#;
+
+   --  Which structure Identify should return: the controller itself.
+   Identify_Controller : constant U32 := 1;
+
+   --  Which structure Identify should return: one namespace.
+   Identify_Namespace : constant U32 := 0;
+
    --  Writes an Identify Controller command into a submission queue slot.
    --
    --  @param Submission Where the submission queue lives
@@ -262,6 +320,93 @@ package Flyology_VFIO_QEMU.NVMe is
       Expected_Phase : Boolean;
       Attempts       : Positive := 20_000) return Completion;
 
+   --  Writes an Identify Namespace command.
+   --  @param Submission Where the submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Namespace Which namespace to describe
+   --  @param Result_Address The device address to deliver the data to
+   procedure Write_Identify_Namespace_Command
+     (Submission     : Queue_Location;
+      Slot           : Natural;
+      Identifier     : U16;
+      Namespace      : U32;
+      Result_Address : U64);
+
+   --  Writes a command creating an I/O completion queue.
+   --
+   --  The completion queue must exist before the submission queue that
+   --  reports into it; the controller rejects the pair in the other order,
+   --  which is one of the few orderings NVMe states outright.
+   --
+   --  @param Submission Where the admin submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Queue_Number Which queue to create, from one
+   --  @param Entries How many entries it holds
+   --  @param Address Where it lives, as a device address
+   procedure Write_Create_Completion_Queue_Command
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Queue_Number : Positive;
+      Entries      : Positive;
+      Address      : U64);
+
+   --  Writes a command creating an I/O submission queue.
+   --  @param Submission Where the admin submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Queue_Number Which queue to create, from one
+   --  @param Completion_Number Which completion queue it reports into
+   --  @param Entries How many entries it holds
+   --  @param Address Where it lives, as a device address
+   procedure Write_Create_Submission_Queue_Command
+     (Submission       : Queue_Location;
+      Slot             : Natural;
+      Identifier       : U16;
+      Queue_Number     : Positive;
+      Completion_Number : Positive;
+      Entries          : Positive;
+      Address          : U64);
+
+   --  Writes a command removing a queue.
+   --  @param Submission Where the admin submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Opcode Which of the two delete opcodes
+   --  @param Queue_Number Which queue to remove
+   procedure Write_Delete_Queue_Command
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Opcode       : U8;
+      Queue_Number : Positive);
+
+   --  Writes a command reading or writing blocks.
+   --
+   --  One data pointer covers a transfer up to a page; a second covers the
+   --  page after it. Anything larger needs a list, which this harness has
+   --  no reason to build.
+   --
+   --  @param Submission Where the I/O submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Opcode Read or write
+   --  @param Namespace Which namespace
+   --  @param First_Block The first logical block
+   --  @param Blocks How many blocks, counted from one
+   --  @param Address Where the data lives, as a device address
+   procedure Write_Block_Command
+     (Submission  : Queue_Location;
+      Slot        : Natural;
+      Identifier  : U16;
+      Opcode      : U8;
+      Namespace   : U32;
+      First_Block : U64;
+      Blocks      : Positive;
+      Address     : U64);
+
    ---------------------------------------------------------------------
    --  The Identify Controller structure
    ---------------------------------------------------------------------
@@ -286,5 +431,29 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @param Data Address of the Identify data
    --  @return The model name
    function Identified_Model (Data : System.Address) return String;
+
+   --  How many namespaces the controller has.
+   --  @param Data Address of the Identify Controller data
+   --  @return The namespace count
+   function Identified_Namespace_Count (Data : System.Address) return U32;
+
+   ---------------------------------------------------------------------
+   --  The Identify Namespace structure
+   ---------------------------------------------------------------------
+
+   --  How many logical blocks the namespace holds.
+   --  @param Data Address of the Identify Namespace data
+   --  @return The block count
+   function Namespace_Blocks (Data : System.Address) return U64;
+
+   --  How large one logical block is, in bytes.
+   --
+   --  The namespace describes several possible formats and says which one
+   --  is in use; the size is the base-two logarithm held in the format
+   --  currently selected, which is not a number a driver may assume.
+   --
+   --  @param Data Address of the Identify Namespace data
+   --  @return The block size in bytes
+   function Namespace_Block_Bytes (Data : System.Address) return Positive;
 
 end Flyology_VFIO_QEMU.NVMe;

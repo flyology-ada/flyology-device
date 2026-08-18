@@ -177,6 +177,42 @@ package body Flyology_VFIO_QEMU.NVMe is
       end loop;
    end Enable;
 
+   --------------------
+   -- Write_Command --
+   --------------------
+
+   procedure Write_Command
+     (Submission : Queue_Location;
+      Slot       : Natural;
+      Opcode     : U8;
+      Identifier : U16;
+      Namespace  : U32 := 0;
+      DPTR1      : U64 := 0;
+      DPTR2      : U64 := 0;
+      CDW10      : U32 := 0;
+      CDW11      : U32 := 0;
+      CDW12      : U32 := 0)
+   is
+      Base     : constant System.Address := Submission.Host;
+      Entry_At : constant Natural := Slot * Submission_Entry_Bytes;
+      Blank    : Byte_Array (0 .. Submission_Entry_Bytes - 1) with Import,
+        Address => Base + SSE.Storage_Offset (Entry_At);
+   begin
+      --  Cleared first. Every field this command does not use must be zero,
+      --  and a slot being reused still holds the last command that went
+      --  through it.
+      Blank := (others => 0);
+
+      Put_32 (Base, Entry_At + 0, U32 (Opcode));
+      Put_16 (Base, Entry_At + 2, Identifier);
+      Put_32 (Base, Entry_At + 4, Namespace);
+      Put_64 (Base, Entry_At + 24, DPTR1);
+      Put_64 (Base, Entry_At + 32, DPTR2);
+      Put_32 (Base, Entry_At + 40, CDW10);
+      Put_32 (Base, Entry_At + 44, CDW11);
+      Put_32 (Base, Entry_At + 48, CDW12);
+   end Write_Command;
+
    -----------------------------
    -- Write_Identify_Command --
    -----------------------------
@@ -187,21 +223,120 @@ package body Flyology_VFIO_QEMU.NVMe is
       Identifier     : U16;
       Result_Address : U64)
    is
-      Base  : constant System.Address := Submission.Host;
-      Entry_At : constant Natural := Slot * Submission_Entry_Bytes;
-      Blank : Byte_Array (0 .. Submission_Entry_Bytes - 1) with Import,
-        Address => Base + SSE.Storage_Offset (Entry_At);
    begin
-      Blank := (others => 0);
-
-      --  Opcode six is Identify, and the tenth command word selects which
-      --  structure: one is the controller itself.
-      Put_32 (Base, Entry_At + 0, 16#06#);
-      Put_16 (Base, Entry_At + 2, Identifier);
-      Put_32 (Base, Entry_At + 4, 0);
-      Put_64 (Base, Entry_At + 24, Result_Address);
-      Put_32 (Base, Entry_At + 40, 1);
+      Write_Command
+        (Submission, Slot, Opcode_Identify, Identifier,
+         DPTR1 => Result_Address, CDW10 => Identify_Controller);
    end Write_Identify_Command;
+
+   ----------------------------------------
+   -- Write_Identify_Namespace_Command --
+   ----------------------------------------
+
+   procedure Write_Identify_Namespace_Command
+     (Submission     : Queue_Location;
+      Slot           : Natural;
+      Identifier     : U16;
+      Namespace      : U32;
+      Result_Address : U64)
+   is
+   begin
+      Write_Command
+        (Submission, Slot, Opcode_Identify, Identifier,
+         Namespace => Namespace, DPTR1 => Result_Address,
+         CDW10 => Identify_Namespace);
+   end Write_Identify_Namespace_Command;
+
+   -------------------------------------------
+   -- Write_Create_Completion_Queue_Command --
+   -------------------------------------------
+
+   procedure Write_Create_Completion_Queue_Command
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Queue_Number : Positive;
+      Entries      : Positive;
+      Address      : U64)
+   is
+   begin
+      --  Bit zero of the eleventh word says the queue is one contiguous
+      --  run of memory rather than a list of pages. It is, because it was
+      --  carved out of a single mapped region.
+      Write_Command
+        (Submission, Slot, Opcode_Create_Completion_Queue, Identifier,
+         DPTR1 => Address,
+         CDW10 => U32 (Queue_Number)
+                  or Interfaces.Shift_Left (U32 (Entries - 1), 16),
+         CDW11 => 1);
+   end Write_Create_Completion_Queue_Command;
+
+   -------------------------------------------
+   -- Write_Create_Submission_Queue_Command --
+   -------------------------------------------
+
+   procedure Write_Create_Submission_Queue_Command
+     (Submission       : Queue_Location;
+      Slot             : Natural;
+      Identifier       : U16;
+      Queue_Number     : Positive;
+      Completion_Number : Positive;
+      Entries          : Positive;
+      Address          : U64)
+   is
+   begin
+      Write_Command
+        (Submission, Slot, Opcode_Create_Submission_Queue, Identifier,
+         DPTR1 => Address,
+         CDW10 => U32 (Queue_Number)
+                  or Interfaces.Shift_Left (U32 (Entries - 1), 16),
+         CDW11 => 1
+                  or Interfaces.Shift_Left (U32 (Completion_Number), 16));
+   end Write_Create_Submission_Queue_Command;
+
+   -------------------------------
+   -- Write_Delete_Queue_Command --
+   -------------------------------
+
+   procedure Write_Delete_Queue_Command
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Opcode       : U8;
+      Queue_Number : Positive)
+   is
+   begin
+      Write_Command
+        (Submission, Slot, Opcode, Identifier,
+         CDW10 => U32 (Queue_Number));
+   end Write_Delete_Queue_Command;
+
+   ---------------------------
+   -- Write_Block_Command --
+   ---------------------------
+
+   procedure Write_Block_Command
+     (Submission  : Queue_Location;
+      Slot        : Natural;
+      Identifier  : U16;
+      Opcode      : U8;
+      Namespace   : U32;
+      First_Block : U64;
+      Blocks      : Positive;
+      Address     : U64)
+   is
+   begin
+      --  The block count is held one less than the real number, which is
+      --  the single most reliable way to write a driver that transfers one
+      --  block too few or one too many.
+      Write_Command
+        (Submission, Slot, Opcode, Identifier,
+         Namespace => Namespace,
+         DPTR1 => Address,
+         CDW10 => U32 (First_Block and 16#FFFF_FFFF#),
+         CDW11 => U32 (Interfaces.Shift_Right (First_Block, 32)),
+         CDW12 => U32 (Blocks - 1));
+   end Write_Block_Command;
 
    ---------------------------------
    -- Ring_Submission_Doorbell --
@@ -334,5 +469,60 @@ package body Flyology_VFIO_QEMU.NVMe is
 
    function Identified_Model (Data : System.Address) return String is
      (Trimmed (Data, 24, 40));
+
+   -----------------------------------
+   -- Identified_Namespace_Count --
+   -----------------------------------
+
+   function Identified_Namespace_Count (Data : System.Address) return U32 is
+      Bytes : Byte_Array (0 .. 3) with Import,
+        Address => Data + SSE.Storage_Offset (516);
+   begin
+      return U32 (Bytes (0))
+        or Interfaces.Shift_Left (U32 (Bytes (1)), 8)
+        or Interfaces.Shift_Left (U32 (Bytes (2)), 16)
+        or Interfaces.Shift_Left (U32 (Bytes (3)), 24);
+   end Identified_Namespace_Count;
+
+   ------------------------
+   -- Namespace_Blocks --
+   ------------------------
+
+   function Namespace_Blocks (Data : System.Address) return U64 is
+      Bytes : Byte_Array (0 .. 7) with Import, Address => Data;
+      Total : U64 := 0;
+   begin
+      for Index in reverse Bytes'Range loop
+         Total := Interfaces.Shift_Left (Total, 8) or U64 (Bytes (Index));
+      end loop;
+      return Total;
+   end Namespace_Blocks;
+
+   -----------------------------
+   -- Namespace_Block_Bytes --
+   -----------------------------
+
+   function Namespace_Block_Bytes (Data : System.Address) return Positive is
+      --  Byte 26 says which of the sixteen possible formats is in use, and
+      --  each format is a four-byte entry starting at byte 128 whose third
+      --  byte holds the base-two logarithm of the block size. Assuming 512
+      --  bytes is the classic way to write a driver that works on every
+      --  disk the author owned.
+      Selected : Byte_Array (0 .. 0) with Import,
+        Address => Data + SSE.Storage_Offset (26);
+      Format   : constant Natural := Natural (Selected (0) and 16#0F#);
+      Entry_At : constant Natural := 128 + 4 * Format;
+      Exponent : Byte_Array (0 .. 0) with Import,
+        Address => Data + SSE.Storage_Offset (Entry_At + 2);
+      Power    : constant Natural := Natural (Exponent (0));
+   begin
+      if Power < 9 or else Power > 20 then
+         raise Device_Misbehaved with
+           "the namespace reports a logical block size of two to the"
+           & Natural'Image (Power) & ", which is outside anything the"
+           & " specification allows";
+      end if;
+      return 2 ** Power;
+   end Namespace_Block_Bytes;
 
 end Flyology_VFIO_QEMU.NVMe;

@@ -1,6 +1,9 @@
 with Flyology_VFIO.Regions;
 with Interfaces;
+with System;
 use type Interfaces.Unsigned_8;
+use type Interfaces.Unsigned_16;
+use type Interfaces.Unsigned_64;
 use type Interfaces.Unsigned_32;
 
 --  An Intel 82574L gigabit controller, as QEMU emulates it.
@@ -63,8 +66,188 @@ package Flyology_VFIO_QEMU.E1000E is
    --  Set in the high half of a receive address when it holds a real one.
    Receive_Address_Valid : constant U32 := 2 ** 31;
 
+   --  Interrupt cause, read to find out why the device interrupted.
+   Interrupt_Cause_Register : constant := 16#000C0#;
+
+   --  Interrupt mask set, written to ask for interrupts.
+   Interrupt_Mask_Set_Register : constant := 16#000D0#;
+
+   --  Interrupt mask clear, written to stop asking.
+   Interrupt_Mask_Clear_Register : constant := 16#000D8#;
+
+   --  Receive control.
+   Receive_Control_Register : constant := 16#00100#;
+
+   --  Transmit control.
+   Transmit_Control_Register : constant := 16#00400#;
+
+   --  Inter-packet gap timing.
+   Transmit_Gap_Register : constant := 16#00410#;
+
+   --  Where the receive descriptor ring lives, low then high.
+   Receive_Base_Low_Register  : constant := 16#02800#;
+   Receive_Base_High_Register : constant := 16#02804#;
+
+   --  How long the receive ring is, in bytes.
+   Receive_Length_Register : constant := 16#02808#;
+
+   --  The descriptor the device will fill next.
+   Receive_Head_Register : constant := 16#02810#;
+
+   --  The last descriptor the driver has given the device.
+   Receive_Tail_Register : constant := 16#02818#;
+
+   --  The same four for transmit.
+   Transmit_Base_Low_Register  : constant := 16#03800#;
+   Transmit_Base_High_Register : constant := 16#03804#;
+   Transmit_Length_Register    : constant := 16#03808#;
+   Transmit_Head_Register      : constant := 16#03810#;
+   Transmit_Tail_Register      : constant := 16#03818#;
+
+   --  Counters the device keeps. Both clear when read, which makes them a
+   --  useful check of the rule that a read-clearing register must never be
+   --  read-modify-written.
+   Good_Packets_Received_Register    : constant := 16#04074#;
+   Good_Packets_Transmitted_Register : constant := 16#04080#;
+
+   --  Set in the receive control register to enable receiving.
+   Receive_Enable : constant U32 := 2 ** 1;
+
+   --  Set to accept broadcast frames, which an address resolution reply
+   --  is not, but the request that provokes it is.
+   Receive_Broadcast : constant U32 := 2 ** 15;
+
+   --  Set to have the device strip the frame check sequence, so the length
+   --  a descriptor reports is the length of the frame proper.
+   Receive_Strip_CRC : constant U32 := 2 ** 26;
+
+   --  Set in the transmit control register to enable transmitting.
+   Transmit_Enable : constant U32 := 2 ** 1;
+
+   --  Set to have the device pad short frames to the minimum length.
+   Transmit_Pad_Short : constant U32 := 2 ** 3;
+
+   --  Set in a descriptor's status byte once the device has finished with
+   --  it. It is how a driver knows a frame has gone or arrived, and it is
+   --  written by the device into memory the driver owns.
+   Descriptor_Done : constant U8 := 2 ** 0;
+
+   --  Set in a receive descriptor's status when the frame ends there.
+   Descriptor_End_Of_Packet : constant U8 := 2 ** 1;
+
+   --  Set in a transmit descriptor's command byte: this is the last
+   --  descriptor of the frame, insert a frame check sequence, and report
+   --  when done.
+   Transmit_End_Of_Packet : constant U8 := 2 ** 0;
+   Transmit_Insert_CRC    : constant U8 := 2 ** 1;
+   Transmit_Report_Status : constant U8 := 2 ** 3;
+
+   --  How large a descriptor is, in bytes, in both rings.
+   Descriptor_Bytes : constant := 16;
+
+   --  How large each receive buffer is. The receive control register's
+   --  default size, chosen because it holds any frame this test sends.
+   Receive_Buffer_Bytes : constant := 2048;
+
    --  A hardware address, in the order the bytes appear on the wire.
    type MAC_Address is array (1 .. 6) of U8;
+
+   --  Where a descriptor ring lives, as both addresses of the same bytes.
+   --
+   --  @field Host Where this process writes and reads descriptors
+   --  @field Device The address the controller is given
+   --  @field Count How many descriptors the ring holds
+   type Ring_Location is record
+      Host   : System.Address;
+      Device : U64;
+      Count  : Positive;
+   end record;
+
+   --  Points the device at a receive ring and enables receiving.
+   --
+   --  Every descriptor is filled in with the address of its own buffer
+   --  before the tail is advanced, because the device begins using them the
+   --  moment it is told they are there.
+   --
+   --  @param BAR The device's mapped registers
+   --  @param Ring Where the descriptor ring lives
+   --  @param Buffers The device address of the first receive buffer
+   --  @param Buffer_Bytes How large each buffer is
+   procedure Start_Receiving
+     (BAR          : Regions.Window;
+      Ring         : Ring_Location;
+      Buffers      : U64;
+      Buffer_Bytes : Positive := Receive_Buffer_Bytes);
+
+   --  Points the device at a transmit ring and enables transmitting.
+   --  @param BAR The device's mapped registers
+   --  @param Ring Where the descriptor ring lives
+   procedure Start_Transmitting
+     (BAR : Regions.Window; Ring : Ring_Location);
+
+   --  Hands one frame to the device and waits for it to be taken.
+   --
+   --  The descriptor is written, then the tail register: a release store,
+   --  because the descriptor must be visible to the device before the
+   --  device is told the descriptor exists. Waiting for the done bit is
+   --  waiting for the device to write into the driver's own memory.
+   --
+   --  @param BAR The device's mapped registers
+   --  @param Ring Where the transmit ring lives
+   --  @param Slot Which descriptor to use
+   --  @param Frame The device address of the frame
+   --  @param Length How many bytes the frame holds
+   --  @param Attempts How many times to poll before giving up
+   --  @exception Device_Misbehaved The device did not take the frame
+   procedure Transmit
+     (BAR      : Regions.Window;
+      Ring     : Ring_Location;
+      Slot     : Natural;
+      Frame    : U64;
+      Length   : Positive;
+      Attempts : Positive := 20_000);
+
+   --  What arrived in one receive descriptor.
+   --
+   --  @field Arrived Whether the device has finished with this descriptor
+   --  @field Length How many bytes the frame holds
+   --  @field Complete Whether the frame ends in this descriptor
+   --  @field Errors The device's error byte, zero when the frame is sound
+   type Received_Frame is record
+      Arrived  : Boolean;
+      Length   : Natural;
+      Complete : Boolean;
+      Errors   : U8;
+   end record;
+
+   --  Reads one receive descriptor without waiting.
+   --  @param Ring Where the receive ring lives
+   --  @param Slot Which descriptor to read
+   --  @return What the device wrote there
+   function Peek_Received
+     (Ring : Ring_Location; Slot : Natural) return Received_Frame;
+
+   --  Waits for a frame to arrive in one descriptor.
+   --  @param Ring Where the receive ring lives
+   --  @param Slot Which descriptor to watch
+   --  @param Attempts How many times to poll before giving up
+   --  @return What arrived
+   --  @exception Device_Misbehaved Nothing arrived in time
+   function Await_Received
+     (Ring     : Ring_Location;
+      Slot     : Natural;
+      Attempts : Positive := 20_000) return Received_Frame;
+
+   --  Gives a receive descriptor back to the device.
+   --  @param BAR The device's mapped registers
+   --  @param Ring Where the receive ring lives
+   --  @param Slot Which descriptor is being returned
+   --  @param Buffer The device address of its buffer
+   procedure Recycle_Received
+     (BAR    : Regions.Window;
+      Ring   : Ring_Location;
+      Slot   : Natural;
+      Buffer : U64);
 
    --  Reads the first receive address out of the device.
    --

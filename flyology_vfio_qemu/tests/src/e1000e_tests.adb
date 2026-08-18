@@ -11,6 +11,10 @@
 --  rubbish fails that; a self-consistency check would not.
 
 with Ada.Command_Line;
+with Flyology_DMA.Mappers;
+with Flyology_DMA.Regions;
+with Flyology_VFIO.DMA_Mapper;
+with System.Storage_Elements;
 with Ada.Environment_Variables;
 with Ada.Exceptions;
 with Flyology_DMA;
@@ -41,6 +45,28 @@ procedure E1000E_Tests is
    use type DMA.Byte_Count;
    use type Interfaces.Unsigned_32;
    use type NIC.MAC_Address;
+   use type Interfaces.Unsigned_8;
+   use type Interfaces.Unsigned_64;
+   use type System.Storage_Elements.Storage_Offset;
+
+   package SSE renames System.Storage_Elements;
+
+   Window_Base : constant DMA.IOVA_Address := 16#0400_0000#;
+
+   --  Sixteen descriptors in each ring. The receive ring's length register
+   --  is in bytes and must be a multiple of a hundred and twenty-eight,
+   --  which sixteen sixteen-byte descriptors satisfies exactly.
+   Ring_Slots : constant Positive := 16;
+
+   Receive_Ring_Offset    : constant DMA.Byte_Count := 0;
+   Transmit_Ring_Offset   : constant DMA.Byte_Count := 4096;
+   Receive_Buffers_Offset : constant DMA.Byte_Count := 8192;
+   Transmit_Frame_Offset  : constant DMA.Byte_Count := 65536;
+
+   --  The addresses QEMU's user networking uses: it answers as the gateway
+   --  and hands out the guest address below it.
+   Gateway_Address : constant array (1 .. 4) of U8 := [10, 0, 2, 2];
+   Our_Address     : constant array (1 .. 4) of U8 := [10, 0, 2, 15];
 
    --  What the machine was started with, read from the environment so that
    --  the harness and the test cannot disagree silently.
@@ -217,6 +243,199 @@ begin
               (NIC.Hardware_Address (BAR) = Before,
                "the hardware address survived the reset, as it comes from"
                & " the device rather than from anything written to it");
+         end;
+
+         ---------------------------------------------------------------
+         --  Rings, and a frame that goes out and comes back
+         ---------------------------------------------------------------
+
+         --  Everything above could pass against a device that never moved
+         --  a byte. This is the part that makes it a network controller:
+         --  descriptor rings in host memory the device reaches by DMA, a
+         --  frame handed to it, and a reply written back into memory this
+         --  program owns.
+         Config.Enable_Bus_Mastering (Device);
+         Harness.Check
+           (Config.Bus_Mastering_Enabled (Device),
+            "bus mastering is enabled, without which the device can reach"
+            & " neither ring");
+
+         --  Ask the device to bring the link up. Without it the transmit
+         --  path accepts descriptors and drops the frames.
+         Reg.Write_32
+           (BAR, NIC.Control_Register,
+            Reg.Read_32 (BAR, NIC.Control_Register) or NIC.Control_Set_Link_Up);
+
+         declare
+            Backend : aliased DMA_Mapper.Container_Mapper;
+            Area    : constant DMA.Regions.Region :=
+              DMA.Regions.Create (2 * 1024 * 1024, DMA.Regular_Pages);
+         begin
+            DMA_Mapper.Bind (Backend, Container);
+
+            declare
+               Bound : constant DMA.Mappers.Mapping :=
+                 DMA.Mappers.Map_Region
+                   (Backend'Access, Area, Window_Base,
+                    DMA.Mappers.Device_Reads_And_Writes);
+               pragma Unreferenced (Bound);
+
+               Host : constant System.Address :=
+                 DMA.Regions.Base_Address (Area);
+
+               Receive_Ring : constant NIC.Ring_Location :=
+                 (Host   => Host + SSE.Storage_Offset (Receive_Ring_Offset),
+                  Device => U64 (Window_Base) + U64 (Receive_Ring_Offset),
+                  Count  => Ring_Slots);
+               Transmit_Ring : constant NIC.Ring_Location :=
+                 (Host   => Host + SSE.Storage_Offset (Transmit_Ring_Offset),
+                  Device => U64 (Window_Base) + U64 (Transmit_Ring_Offset),
+                  Count  => Ring_Slots);
+
+               Receive_Buffers : constant U64 :=
+                 U64 (Window_Base) + U64 (Receive_Buffers_Offset);
+               Transmit_Frame : constant U64 :=
+                 U64 (Window_Base) + U64 (Transmit_Frame_Offset);
+
+               Frame_Bytes : array (0 .. 2047) of U8
+                 with Import, Volatile,
+                      Address =>
+                        Host + SSE.Storage_Offset (Transmit_Frame_Offset);
+
+               Ours : constant NIC.MAC_Address := NIC.Hardware_Address (BAR);
+               Request_Length : constant := 42;
+            begin
+               NIC.Start_Receiving (BAR, Receive_Ring, Receive_Buffers);
+               NIC.Start_Transmitting (BAR, Transmit_Ring);
+
+               Harness.Check
+                 ((Reg.Read_32 (BAR, NIC.Receive_Control_Register)
+                     and NIC.Receive_Enable) /= 0,
+                  "the receiver is enabled");
+               Harness.Check
+                 ((Reg.Read_32 (BAR, NIC.Transmit_Control_Register)
+                     and NIC.Transmit_Enable) /= 0,
+                  "the transmitter is enabled");
+
+               --  An address resolution request for the gateway. QEMU's
+               --  user networking answers it, which is what makes both
+               --  directions testable without a second machine.
+               Frame_Bytes := (others => 0);
+               for Index in 0 .. 5 loop
+                  Frame_Bytes (Index) := 16#FF#;                --  broadcast
+                  Frame_Bytes (6 + Index) := Ours (Index + 1);  --  from us
+               end loop;
+               Frame_Bytes (12) := 16#08#;  --  address resolution
+               Frame_Bytes (13) := 16#06#;
+               Frame_Bytes (14) := 16#00#;  --  over Ethernet
+               Frame_Bytes (15) := 16#01#;
+               Frame_Bytes (16) := 16#08#;  --  resolving IPv4
+               Frame_Bytes (17) := 16#00#;
+               Frame_Bytes (18) := 6;
+               Frame_Bytes (19) := 4;
+               Frame_Bytes (20) := 16#00#;  --  a request
+               Frame_Bytes (21) := 16#01#;
+               for Index in 0 .. 5 loop
+                  Frame_Bytes (22 + Index) := Ours (Index + 1);
+               end loop;
+               for Index in 0 .. 3 loop
+                  Frame_Bytes (28 + Index) := Our_Address (Index + 1);
+                  Frame_Bytes (38 + Index) := Gateway_Address (Index + 1);
+               end loop;
+
+               NIC.Transmit
+                 (BAR, Transmit_Ring, Slot => 0,
+                  Frame => Transmit_Frame, Length => Request_Length);
+               Harness.Check
+                 (True,
+                  "the device reported finishing with the transmit"
+                  & " descriptor, which it writes by DMA");
+
+               declare
+                  Arrived : constant NIC.Received_Frame :=
+                    NIC.Await_Received (Receive_Ring, Slot => 0);
+
+                  Reply : array (0 .. 2047) of U8
+                    with Import, Volatile,
+                         Address =>
+                           Host + SSE.Storage_Offset (Receive_Buffers_Offset);
+               begin
+                  Harness.Check (Arrived.Arrived, "a frame arrived");
+                  Harness.Check
+                    (Arrived.Complete,
+                     "the frame is complete in one descriptor");
+                  Harness.Check_Equal
+                    (U32 (Arrived.Errors), 0,
+                     "the device reported no error with it");
+                  Harness.Note
+                    ("received" & Natural'Image (Arrived.Length)
+                     & " bytes");
+                  Harness.Check
+                    (Arrived.Length >= 42,
+                     "it is long enough to be an address resolution reply");
+
+                  Harness.Check
+                    (Reply (12) = 16#08# and then Reply (13) = 16#06#,
+                     "it is an address resolution frame");
+                  Harness.Check
+                    (Reply (20) = 16#00# and then Reply (21) = 16#02#,
+                     "it is a reply rather than another request");
+
+                  declare
+                     Addressed_To_Us : Boolean := True;
+                     From_Gateway    : Boolean := True;
+                  begin
+                     for Index in 0 .. 5 loop
+                        if Reply (Index) /= Ours (Index + 1) then
+                           Addressed_To_Us := False;
+                        end if;
+                     end loop;
+                     for Index in 0 .. 3 loop
+                        if Reply (28 + Index) /= Gateway_Address (Index + 1)
+                        then
+                           From_Gateway := False;
+                        end if;
+                     end loop;
+
+                     Harness.Check
+                       (Addressed_To_Us,
+                        "the reply is addressed to the hardware address this"
+                        & " device reported");
+                     Harness.Check
+                       (From_Gateway,
+                        "it answers for the address that was asked about,"
+                        & " so the frame this driver built was understood");
+                  end;
+
+                  NIC.Recycle_Received
+                    (BAR, Receive_Ring, Slot => 0, Buffer => Receive_Buffers);
+               end;
+
+               --  The device's own counters. Both clear when read, which
+               --  is why they are read once and compared rather than read
+               --  twice.
+               declare
+                  Sent     : constant U32 :=
+                    Reg.Read_32 (BAR, NIC.Good_Packets_Transmitted_Register);
+                  Received : constant U32 :=
+                    Reg.Read_32 (BAR, NIC.Good_Packets_Received_Register);
+               begin
+                  Harness.Note
+                    ("the device counted" & U32'Image (Sent) & " sent and"
+                     & U32'Image (Received) & " received");
+                  Harness.Check
+                    (Sent >= 1, "it counted the frame it sent");
+                  Harness.Check
+                    (Received >= 1, "it counted the frame it received");
+                  Harness.Check
+                    (Reg.Read_32
+                       (BAR, NIC.Good_Packets_Transmitted_Register) = 0,
+                     "the counter cleared when it was read, which is why a"
+                     & " read-modify-write of such a register loses counts");
+               end;
+            end;
+
+            Config.Disable_Bus_Mastering (Device);
          end;
       end;
    end;
