@@ -48,6 +48,11 @@ usage () {
 
 vm_pidfile="$state/qemu.pid"
 
+#  Which virtual devices the guest gets. Overridable so that a device can be
+#  tried without editing this file, but the default is the set the test
+#  suites actually cover.
+devices=${FLYOLOGY_DEVICE_VM_DEVICES:-"-device edu -device pci-testdev"}
+
 is_running () {
   [ -f "$vm_pidfile" ] && kill -0 "$(cat "$vm_pidfile")" 2>/dev/null
 }
@@ -75,7 +80,14 @@ do_up () {
 
   #  iommu=smmuv3 is what makes this worth doing: without an emulated
   #  IOMMU the guest has no /dev/vfio groups and nothing here can run.
-  qemu-system-"$guest_arch" \
+  #  Started in a session of its own. Without that, whatever reaps the
+  #  shell that launched the guest — a timeout, a CI step ending, a
+  #  terminal closing — signals the whole process group and takes the guest
+  #  with it, and the next command reports a guest that is not running for
+  #  no visible reason. setsid does this on Linux and does not exist on
+  #  macOS, so the launcher is a three-line Python script that calls
+  #  setsid(2) directly and is present wherever the console driver is.
+  "$repo_root/scripts/qemu/detach.py" qemu-system-"$guest_arch" \
     -machine virt,accel=hvf,gic-version=3,iommu=smmuv3 \
     -cpu host -smp 4 -m 4096 \
     -drive if=pflash,format=raw,readonly=on,file="$firmware" \
@@ -83,8 +95,7 @@ do_up () {
     -drive if=virtio,format=qcow2,file="$state/overlay.qcow2" \
     -fsdev local,id=share,path="$state/share",security_model=none \
     -device virtio-9p-pci,fsdev=share,mount_tag=share \
-    -device edu \
-    -device pci-testdev \
+    $devices \
     -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
     -nographic -display none \
     -serial unix:"$short/console.sock",server,nowait \
