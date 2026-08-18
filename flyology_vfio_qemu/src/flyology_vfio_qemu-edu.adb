@@ -13,7 +13,6 @@ package body Flyology_VFIO_QEMU.Edu is
    procedure Wait_Microseconds (Count : Interfaces.C.unsigned)
      with Import, Convention => C, External_Name => "usleep";
 
-   use type Interfaces.Unsigned_64;
 
    --------------------
    -- Identification --

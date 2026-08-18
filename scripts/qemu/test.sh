@@ -79,13 +79,39 @@ for suite in scalar_tests address_space_tests region_tests mapper_tests \
   run_in_guest "/mnt/share/$suite" || status=1
 done
 
-#  The device tests need their devices bound to vfio-pci. Binding is done
-#  here, on a guest that exists to be changed, and never by a library.
-run_in_guest 'modprobe vfio-pci 2>/dev/null; for a in $(ls /sys/bus/pci/devices); do v=$(cat /sys/bus/pci/devices/$a/vendor); d=$(cat /sys/bus/pci/devices/$a/device); case "$v:$d" in "0x1234:0x11e8"|"0x1b36:0x0005") echo vfio-pci > /sys/bus/pci/devices/$a/driver_override; echo $a > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null; printf "bound %s (%s:%s)\\n" "$a" "$v" "$d";; esac; done'
+#  The device tests need their devices bound to vfio-pci, and two of them
+#  are claimed by kernel drivers first. Unbinding is done here, on a guest
+#  that exists to be changed, for a fixed list of device identifiers that
+#  belong to this harness — never by a library, never by identifier
+#  discovery, and never on a machine anyone depends on. Unbinding the wrong
+#  device takes a machine down.
+run_in_guest 'modprobe vfio-pci 2>/dev/null
+for d in /sys/bus/pci/devices/*; do
+  a=$(basename $d)
+  case "$(cat $d/vendor):$(cat $d/device)" in
+    0x1234:0x11e8|0x1b36:0x0005|0x1b36:0x0010|0x8086:0x10d3) ;;
+    *) continue ;;
+  esac
+  if [ -e "$d/driver" ]; then
+    echo "$a" > "$d/driver/unbind" 2>/dev/null
+  fi
+  echo vfio-pci > "$d/driver_override"
+  echo "$a" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null
+  printf "bound %s (%s:%s) group %s\n" "$a" "$(cat $d/vendor)" \
+    "$(cat $d/device)" "$(basename $(readlink $d/iommu_group))"
+done'
 
-for suite in edu_tests pci_testdev_tests; do
+#  The values the guest was started with are passed to the tests that read
+#  them back out of a device, so that the harness and the tests cannot
+#  disagree about what the corpus is. A test that made up its own expected
+#  value would be checking itself.
+corpus="FLYOLOGY_DEVICE_VM_MAC=${FLYOLOGY_DEVICE_VM_MAC:-52:54:00:12:34:56}"
+corpus="$corpus FLYOLOGY_DEVICE_VM_NVME_SERIAL=${FLYOLOGY_DEVICE_VM_NVME_SERIAL:-flyology0001}"
+
+for suite in edu_tests container_sharing_tests pci_testdev_tests \
+             nvme_tests e1000e_tests; do
   printf '\n== %s ==\n' "$suite"
-  run_in_guest "/mnt/share/$suite" || status=1
+  run_in_guest "$corpus /mnt/share/$suite" || status=1
 done
 
 printf '\n== dma_region_walkthrough ==\n'

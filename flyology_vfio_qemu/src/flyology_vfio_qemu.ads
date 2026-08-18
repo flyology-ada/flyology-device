@@ -58,11 +58,23 @@ package Flyology_VFIO_QEMU is
    --  but is bound elsewhere is reported as not found, with a message
    --  saying so, because binding it is not this crate's decision to make.
    --
+   --  Instance selects among several devices of the same identity, in the
+   --  order the addresses sort. Two of one device is how a container
+   --  holding more than one group gets tested.
+   --
    --  @param Vendor The PCI vendor identifier
    --  @param Device The PCI device identifier
+   --  @param Instance Which of the matching devices to return, from one
    --  @return The device's address
    --  @exception Device_Not_Available No such device is bound to vfio-pci
-   function Find (Vendor : U16; Device : U16) return String;
+   function Find
+     (Vendor : U16; Device : U16; Instance : Positive := 1) return String;
+
+   --  How many devices of this identity are bound to vfio-pci.
+   --  @param Vendor The PCI vendor identifier
+   --  @param Device The PCI device identifier
+   --  @return Count of usable devices
+   function Available (Vendor : U16; Device : U16) return Natural;
 
    --  Whether a device with this identity exists at all, bound or not.
    --  @param Vendor The PCI vendor identifier

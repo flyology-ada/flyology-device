@@ -5,7 +5,13 @@ licenses = "MIT OR Apache-2.0"
 authors = ["Yurii Rashkovskii"]
 maintainers = ["Yurii Rashkovskii <yrashk@gmail.com>"]
 maintainers-logins = ["yrashk"]
-executables = ["edu_tests", "pci_testdev_tests"]
+executables = [
+  "edu_tests",
+  "container_sharing_tests",
+  "pci_testdev_tests",
+  "nvme_tests",
+  "e1000e_tests",
+]
 
 [[depends-on]]
 flyology_vfio_qemu = "*"

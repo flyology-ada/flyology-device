@@ -48,10 +48,34 @@ usage () {
 
 vm_pidfile="$state/qemu.pid"
 
-#  Which virtual devices the guest gets. Overridable so that a device can be
-#  tried without editing this file, but the default is the set the test
-#  suites actually cover.
-devices=${FLYOLOGY_DEVICE_VM_DEVICES:-"-device edu -device pci-testdev"}
+#  Which virtual devices the guest gets. Overridable so that a candidate can
+#  be tried without editing this file; the default is the set the test
+#  suites cover.
+#
+#  Two edu devices rather than one, deliberately: they land in separate
+#  IOMMU groups, which is the only way to exercise a container holding more
+#  than one group, and the only way to demonstrate that a container is one
+#  shared address space rather than a per-device one.
+#
+#  e1000e carries an option ROM the firmware will try to network-boot from,
+#  which adds a long pause to every boot; romfile= removes it. A display
+#  device is deliberately absent: it gives the firmware a graphics console
+#  and the serial boot this harness drives never completes.
+#
+#  MAC and serial number are fixed rather than left to default, because the
+#  tests read them back out of the devices and compare. A value chosen here
+#  and recovered through MMIO is worth more than a self-consistency check.
+device_mac=${FLYOLOGY_DEVICE_VM_MAC:-52:54:00:12:34:56}
+device_serial=${FLYOLOGY_DEVICE_VM_NVME_SERIAL:-flyology0001}
+
+devices=${FLYOLOGY_DEVICE_VM_DEVICES:-"
+  -device edu
+  -device edu
+  -device pci-testdev
+  -drive id=nvmedisk,file=$state/nvme.qcow2,if=none,format=qcow2
+  -device nvme,drive=nvmedisk,serial=$device_serial,msix_qsize=8
+  -device e1000e,mac=$device_mac,romfile=
+"}
 
 is_running () {
   [ -f "$vm_pidfile" ] && kill -0 "$(cat "$vm_pidfile")" 2>/dev/null
@@ -72,9 +96,27 @@ do_up () {
     mv "$state/$image_name.part" "$state/$image_name"
   fi
 
+  #  The firmware variable store remembers boot entries for devices that
+  #  are later removed, and then hangs waiting for them. Rebuilding it
+  #  whenever the device set changes costs a few seconds of boot and saves
+  #  a confusing hang.
+  device_stamp="$state/devices.stamp"
+  if [ ! -f "$device_stamp" ] \
+    || [ "$(cat "$device_stamp")" != "$devices" ]
+  then
+    rm -f "$state/vars.fd"
+    printf '%s' "$devices" > "$device_stamp"
+  fi
+
   [ -f "$state/vars.fd" ] || cp "$firmware_vars" "$state/vars.fd"
   [ -f "$state/overlay.qcow2" ] || qemu-img create -q -f qcow2 \
     -b "$state/$image_name" -F qcow2 "$state/overlay.qcow2" 20G
+
+  #  A backing file for the NVMe controller. Its contents never matter: the
+  #  tests drive the controller's registers and its admin queue, and never
+  #  read or write a block.
+  [ -f "$state/nvme.qcow2" ] || qemu-img create -q -f qcow2 \
+    "$state/nvme.qcow2" 64M
 
   rm -f "$short/console.sock"
 

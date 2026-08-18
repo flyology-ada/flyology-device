@@ -25,13 +25,32 @@ tries to use it.
 
 | Device | Identity | What it exercises |
 | --- | --- | --- |
-| `edu` | `1234:11e8` | BAR mapping, MMIO of every width, ordered accesses, a computation with a completion flag, a DMA engine that follows an IOVA, interrupt delivery over eventfd |
-| `pci-testdev` | `1b36:0005` | A second device that is not the one the crates were brought up on; an MMIO BAR and, usefully, an I/O port region that VFIO reports as unmappable |
+| `edu` ×2 | `1234:11e8` | BAR mapping, MMIO of every width, ordered accesses, a computation with a completion flag, a DMA engine that follows an IOVA, interrupt delivery over eventfd. Two of them, in separate IOMMU groups, so a container holding more than one group can be tested |
+| `pci-testdev` | `1b36:0005` | An MMIO BAR and, usefully, an I/O port region VFIO reports as unmappable, so the refusal path meets a real kernel refusal |
+| `nvme` | `1b36:0010` | A 64-bit BAR, 64-bit registers, a doorbell at a stride the device itself reports, eight MSI-X vectors, a region carrying a capability chain, and a controller that reaches memory by DMA through three separately programmed addresses |
+| `e1000e` | `8086:10d3` | Four regions on one device — MMIO, flash, an unmappable I/O window, and an MSI-X region with a capability chain — five MSI-X vectors, and a reset the device completes itself |
 
-`ivshmem` would have been a third. QEMU 10.2 has no ivshmem device at all —
-it was deprecated upstream and dropped — so nothing here can test against
-it. The crate is arranged so a third device is a new child package and a new
-test program, nothing more.
+`ivshmem` would have been another. QEMU 10.2 has no ivshmem device at all —
+it was deprecated upstream and dropped. The crate is arranged so another
+device is a new child package and a new test program, nothing more.
+
+## Corpora
+
+Two of the tests check values chosen outside the program, which is worth
+more than any self-consistency check: a register window reading plausible
+rubbish fails them, and a mistake that happens to be internally consistent
+cannot pass.
+
+- The NVMe controller's **serial number** is set on the command line that
+  starts the guest, and arrives here inside four kibibytes the controller
+  wrote by DMA into memory the IOMMU was programmed for. Every address in
+  that path has to be right for the string to appear.
+- The Intel controller's **MAC address** is likewise set on the command
+  line, and is read straight back out of its receive address registers.
+
+Both are passed into the guest by `scripts/qemu/test.sh` rather than
+hard-coded in the tests, so the harness and the tests cannot disagree about
+what the expected value is.
 
 ## What it proves, and what it does not
 
@@ -94,9 +113,9 @@ error anywhere. `flyology_vfio` had no unmask operation at all; it now has
 
 ## Status
 
-Both suites pass in full: `edu_tests` at 29 checks and
-`pci_testdev_tests` at 10, run in the repository's virtual machine against
-an emulated SMMUv3.
+All five suites pass in the repository's virtual machine against an
+emulated SMMUv3: `edu_tests` at 29 checks, `container_sharing_tests` at 18,
+`pci_testdev_tests` at 10, `nvme_tests` at 20, and `e1000e_tests` at 15.
 
 ## Licence
 
