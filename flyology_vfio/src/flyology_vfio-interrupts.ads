@@ -134,6 +134,33 @@ package Flyology_VFIO.Interrupts is
       Vectors : Vector_Descriptors)
      with Pre => Vectors'Length in 1 .. Maximum_Vectors;
 
+   --  Re-arms an automasked interrupt.
+   --
+   --  This is not optional bookkeeping, and leaving it out is the quietest
+   --  possible failure. A legacy pin interrupt is shared, so the kernel
+   --  masks it the moment it fires and leaves it masked: it has no way to
+   --  know when userspace has quieted the device, and an unmasked shared
+   --  line would re-assert forever. A handler that acknowledges the device
+   --  but never calls this receives exactly one interrupt and then nothing,
+   --  with no error anywhere to say why.
+   --
+   --  Describe reports whether an index works this way. MSI and MSI-X do
+   --  not, and calling this on them is harmless but pointless.
+   --
+   --  Acknowledge the device first, then call this. The other order
+   --  re-arms the line while the device is still asserting it.
+   --
+   --  @param Device The device
+   --  @param Index Which interrupt index to re-arm
+   --  @exception Interrupt_Error The request was refused
+   procedure Unmask (Device : Device_FD; Index : IRQ_Index);
+
+   --  Masks an interrupt without disabling it.
+   --  @param Device The device
+   --  @param Index Which interrupt index to mask
+   --  @exception Interrupt_Error The request was refused
+   procedure Mask (Device : Device_FD; Index : IRQ_Index);
+
    --  Stops delivering a device's interrupts.
    --
    --  Do this before closing the eventfds, so the kernel is not left

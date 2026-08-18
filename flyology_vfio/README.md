@@ -70,7 +70,7 @@ And one that no precondition can express:
 | `Flyology_VFIO.Config_Space` | Read and write configuration space; enable bus mastering |
 | `Flyology_VFIO.Registers` | MMIO access, with barriers |
 | `Flyology_VFIO.DMA_Mapper` | The concrete `Mapper` over a container |
-| `Flyology_VFIO.Interrupts` | eventfd delivery, including MSI-X |
+| `Flyology_VFIO.Interrupts` | eventfd delivery, masking, and MSI-X |
 
 ## Where the numbers come from
 
@@ -111,6 +111,15 @@ whole value the specification calls for.
 
 vfio-pci maps device regions uncacheable and offers no write-combining
 mapping, so no code path here can obtain one.
+
+## Interrupts that arrive exactly once
+
+A legacy pin interrupt is *automasked*: the kernel masks it the moment it
+fires and leaves it masked, because a shared line it cannot quiet would
+re-assert forever. A handler that acknowledges the device but never calls
+`Interrupts.Unmask` therefore receives one interrupt and then silence, with
+nothing reporting the omission. `Interrupts.Describe` says which indices
+behave this way.
 
 ## Building and testing
 

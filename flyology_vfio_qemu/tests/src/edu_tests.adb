@@ -49,22 +49,23 @@ procedure Edu_Tests is
    use type Interfaces.Unsigned_64;
    use type SSE.Storage_Offset;
 
-   --  An IOVA window well inside what an IOMMU can translate.
+   --  Choosing this address took two attempts, and both failures are worth
+   --  recording because neither reported itself.
    --
-   --  The choice matters more than it looks. An earlier version of this
-   --  test used 2**46, which VFIO_IOMMU_MAP_DMA accepted without complaint
-   --  — and which the SMMU then refused to translate, because it reports a
-   --  44-bit input address size. The mapping call succeeding says nothing
-   --  about whether a device can follow the address: the failure appeared
-   --  only when the device dereferenced it, as a translation fault and a
-   --  transfer that never finished.
+   --  2**46 was accepted by VFIO_IOMMU_MAP_DMA and then refused by the
+   --  IOMMU, which advertises a 44-bit input address size. 2**32 fitted the
+   --  IOMMU but not the device, which masks bus addresses to twenty-eight
+   --  bits and issues the transfer against the truncated result rather than
+   --  complaining. In both cases every call returned success and no bytes
+   --  moved.
    --
-   --  Four gibibytes is comfortably inside every IOMMU's range and clear of
-   --  the low addresses platforms tend to reserve. A driver that needs to
-   --  choose properly should read the IOMMU's advertised address ranges
-   --  rather than assume, which is a capability-chain query this crate does
-   --  not yet make.
-   Window_Base : constant DMA.IOVA_Address := 16#0000_0001_0000_0000#;
+   --  An IOVA has to satisfy three separate constraints — the IOMMU's input
+   --  width, the device's DMA width, and the ranges the platform reserves —
+   --  and nothing checks them for you.
+   --  Sixty-four mebibytes: inside the device's twenty-eight bit DMA mask,
+   --  inside every IOMMU's input address size, and clear of the window
+   --  arm64 reserves for interrupt messages at 0x0800_0000.
+   Window_Base : constant DMA.IOVA_Address := 16#0400_0000#;
 
    --  Two buffers inside one mapped region: the device copies out of the
    --  first into its own memory, and back out into the second. Using two
@@ -188,11 +189,16 @@ begin
                Host : constant System.Address :=
                  DMA.Regions.Base_Address (Area);
 
+               --  Volatile because a device writes them behind the
+               --  compiler's back. Without it, nothing tells the optimiser
+               --  that memory it watched this program zero can change
+               --  before it is read again, and it is entitled to reuse
+               --  what it already knows.
                Source_Bytes : array (1 .. Payload_Length) of U8
-                 with Import,
+                 with Import, Volatile,
                       Address => Host + SSE.Storage_Offset (Source_Offset);
                Destination_Bytes : array (1 .. Payload_Length) of U8
-                 with Import,
+                 with Import, Volatile,
                       Address =>
                         Host + SSE.Storage_Offset (Destination_Offset);
             begin
@@ -217,6 +223,18 @@ begin
                   Destination => Edu.Device_Buffer_Base,
                   Count       => Payload_Length,
                   Direction   => Edu.To_Device);
+
+               Harness.Note
+                 ("destination bytes 1..4 before any transfer:"
+                  & U8'Image (Destination_Bytes (1))
+                  & U8'Image (Destination_Bytes (2))
+                  & U8'Image (Destination_Bytes (3))
+                  & U8'Image (Destination_Bytes (4))
+                  & ", source bytes 1..4:"
+                  & U8'Image (Source_Bytes (1))
+                  & U8'Image (Source_Bytes (2))
+                  & U8'Image (Source_Bytes (3))
+                  & U8'Image (Source_Bytes (4)));
 
                Harness.Note
                  ("after the outward transfer the device reports source"
@@ -247,6 +265,13 @@ begin
                         end if;
                      end if;
                   end loop;
+
+                  Harness.Note
+                    ("after the round trip, destination bytes 1..4:"
+                     & U8'Image (Destination_Bytes (1))
+                     & U8'Image (Destination_Bytes (2))
+                     & U8'Image (Destination_Bytes (3))
+                     & U8'Image (Destination_Bytes (4)));
 
                   Harness.Check
                     (Identical,
@@ -301,6 +326,12 @@ begin
                      declare
                         Event : IRQ.Event;
                      begin
+                        Harness.Note
+                          ("interrupt index" & IRQ.IRQ_Index'Image
+                             (IRQ.Legacy_Pin) & " has"
+                           & Natural'Image (Details.Count) & " vector(s),"
+                           & (if Details.Automasked
+                              then " automasked" else " not automasked"));
                         IRQ.Open (Event);
                         IRQ.Enable
                           (Device, IRQ.Legacy_Pin, (0 => IRQ.Descriptor (Event)));
@@ -331,6 +362,14 @@ begin
                         Harness.Check
                           ((Edu.Interrupt_Status (BAR) and 1) = 0,
                            "acknowledging cleared the interrupt");
+
+                        --  The device is quiet again, so the line can be
+                        --  re-armed. Without this the next interrupt never
+                        --  arrives: VFIO masks an automasked index on
+                        --  delivery and leaves it masked.
+                        if Details.Automasked then
+                           IRQ.Unmask (Device, IRQ.Legacy_Pin);
+                        end if;
 
                         --  And the one that matters for a driver: an
                         --  interrupt raised by the device itself at the end
@@ -363,6 +402,9 @@ begin
                            "the announced transfer moved the bytes too");
 
                         Edu.Acknowledge_Interrupt (BAR, Edu.DMA_Interrupt);
+                        if Details.Automasked then
+                           IRQ.Unmask (Device, IRQ.Legacy_Pin);
+                        end if;
                         IRQ.Disable (Device, IRQ.Legacy_Pin);
                      end;
                   end if;

@@ -64,19 +64,39 @@ says what would provide one, rather than passing having checked nothing.
 Nothing in this crate binds or unbinds a driver on a machine it does not
 own.
 
+## What it has already caught
+
+Three bugs, none of which reported itself, and each of a kind that would
+have been extremely hard to find against real hardware.
+
+**An IOVA wider than the IOMMU.** 2⁴⁶ was accepted by
+`VFIO_IOMMU_MAP_DMA` and then refused by an IOMMU advertising a 44-bit
+input address size.
+
+**An IOVA wider than the device.** `edu` masks bus addresses to its
+`dma_mask`, twenty-eight bits by default, and issues the transfer against
+the truncated result rather than complaining. An address of four gibibytes
+became zero. Every layer reported success and no bytes moved. On a machine
+with no IOMMU to refuse the truncated address, it would instead have
+written to whatever physical memory sat at the masked address.
+
+`Edu.Transfer` now refuses an address that does not fit rather than letting
+it be masked, which is the general lesson: an IOVA has to satisfy the
+IOMMU's input width, the device's DMA width, and the ranges the platform
+reserves, and nothing checks them for you.
+
+**A missing unmask.** A legacy pin interrupt is automasked: VFIO masks it on
+delivery and leaves it masked, because it cannot know when userspace has
+quieted a shared line. A handler that acknowledges the device but never
+re-arms the line receives exactly one interrupt and then silence, with no
+error anywhere. `flyology_vfio` had no unmask operation at all; it now has
+`Flyology_VFIO.Interrupts.Unmask`, and this crate is what found the gap.
+
 ## Status
 
-`pci_testdev_tests` passes in full.
-
-`edu_tests` passes 25 of 29 checks: identity, liveness across six probes,
-five factorials with their completion flag, bus mastering, BAR mapping, and
-raising and acknowledging an interrupt. The four that fail are the DMA
-round-trip: transfers complete and the device reports back exactly the
-source, destination and count it was given, but the bytes do not arrive
-where expected and the IOMMU logs translation faults at addresses unrelated
-to the ones programmed. That is unresolved, and it is written down here
-rather than skipped, because a harness that hid its own failing check would
-be worse than useless.
+Both suites pass in full: `edu_tests` at 29 checks and
+`pci_testdev_tests` at 10, run in the repository's virtual machine against
+an emulated SMMUv3.
 
 ## Licence
 

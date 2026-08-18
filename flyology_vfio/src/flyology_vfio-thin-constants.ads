@@ -134,6 +134,15 @@ is
    --  Set what the interrupt triggers.
    IRQ_Set_Action_Trigger             : constant := 16#20#;
 
+   --  Mask an interrupt.
+   IRQ_Set_Action_Mask                : constant := 16#8#;
+
+   --  Unmask an interrupt. An automasked index, which is what a legacy
+   --  pin interrupt is, stays masked after each delivery until this is
+   --  sent, so a handler that never unmasks receives exactly one
+   --  interrupt and then silence.
+   IRQ_Set_Action_Unmask              : constant := 16#10#;
+
    --  This interrupt index can signal an eventfd.
    IRQ_Info_Eventfd                   : constant := 16#1#;
 

@@ -164,6 +164,29 @@ package body Flyology_VFIO_QEMU.Edu is
       Command : U64 := DMA_Start;
       Polls   : Natural := 0;
    begin
+      --  Refuse an address the device would silently truncate. Letting it
+      --  through produces a transfer that completes, reports success, and
+      --  moves nothing — or, without an IOMMU, moves the bytes somewhere
+      --  nobody chose.
+      declare
+         type Endpoint_List is array (Positive range <>) of U64;
+         Endpoints : constant Endpoint_List := [Source, Destination];
+      begin
+         for Endpoint of Endpoints loop
+            if Endpoint > Maximum_DMA_Address then
+               raise Device_Misbehaved with
+                 "address" & U64'Image (Endpoint) & " is wider than the"
+                 & " twenty-eight bits this device can put on the bus, and"
+                 & " it would be masked to" & U64'Image
+                   (Endpoint and Maximum_DMA_Address)
+                 & " rather than refused. Choose an I/O virtual address"
+                 & " below" & U64'Image (Maximum_DMA_Address + 1)
+                 & ", or widen the device's dma_mask property when starting"
+                 & " QEMU.";
+            end if;
+         end loop;
+      end;
+
       if Direction = From_Device then
          Command := Command or DMA_From_Device;
       end if;
@@ -174,6 +197,34 @@ package body Flyology_VFIO_QEMU.Edu is
       Reg.Write_64 (BAR, DMA_Source_Register, Source);
       Reg.Write_64 (BAR, DMA_Destination_Register, Destination);
       Reg.Write_64 (BAR, DMA_Count_Register, Count);
+
+      --  Read the three back before starting. This device ignores writes to
+      --  its transfer registers that are not exactly eight bytes wide, and
+      --  it ignores all of them while a transfer is already running — in
+      --  both cases silently. Checking here turns "the transfer did
+      --  something unexpected" into "the device never received the
+      --  request", which are very different problems.
+      declare
+         Kept_Source      : constant U64 :=
+           Reg.Read_64 (BAR, DMA_Source_Register);
+         Kept_Destination : constant U64 :=
+           Reg.Read_64 (BAR, DMA_Destination_Register);
+         Kept_Count       : constant U64 :=
+           Reg.Read_64 (BAR, DMA_Count_Register);
+      begin
+         if Kept_Source /= Source
+           or else Kept_Destination /= Destination
+           or else Kept_Count /= Count
+         then
+            raise Device_Misbehaved with
+              "the device did not keep the transfer it was given: asked for"
+              & " source" & U64'Image (Source) & " destination"
+              & U64'Image (Destination) & " count" & U64'Image (Count)
+              & ", and it reports source" & U64'Image (Kept_Source)
+              & " destination" & U64'Image (Kept_Destination) & " count"
+              & U64'Image (Kept_Count) & ".";
+         end if;
+      end;
 
       --  The command register is the doorbell, and it is written with
       --  release ordering so the three registers above are visible to the

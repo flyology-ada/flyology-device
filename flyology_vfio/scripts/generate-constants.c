@@ -160,6 +160,13 @@ int main (void)
        "The tail is an array of eventfd descriptors.");
   hex ("IRQ_Set_Action_Trigger", VFIO_IRQ_SET_ACTION_TRIGGER,
        "Set what the interrupt triggers.");
+  hex ("IRQ_Set_Action_Mask", VFIO_IRQ_SET_ACTION_MASK,
+       "Mask an interrupt.");
+  hex ("IRQ_Set_Action_Unmask", VFIO_IRQ_SET_ACTION_UNMASK,
+       "Unmask an interrupt. An automasked index, which is what a legacy "
+       "pin interrupt is, stays masked after each delivery until this is "
+       "sent, so a handler that never unmasks receives exactly one "
+       "interrupt and then silence.");
   hex ("IRQ_Info_Eventfd", VFIO_IRQ_INFO_EVENTFD,
        "This interrupt index can signal an eventfd.");
   hex ("IOMMU_Info_Page_Sizes", VFIO_IOMMU_INFO_PGSIZES,

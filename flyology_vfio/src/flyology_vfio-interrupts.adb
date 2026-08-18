@@ -194,6 +194,59 @@ package body Flyology_VFIO.Interrupts is
       end if;
    end Enable;
 
+   --  Mask and unmask carry no data tail, exactly like Disable: the index
+   --  and the action are the whole request.
+   procedure Set_Mask_State
+     (Device : Device_FD; Index : IRQ_Index; Action : Interfaces.Unsigned_32;
+      Verb   : String);
+
+   ---------------------
+   -- Set_Mask_State --
+   ---------------------
+
+   procedure Set_Mask_State
+     (Device : Device_FD; Index : IRQ_Index; Action : Interfaces.Unsigned_32;
+      Verb   : String)
+   is
+      Request : aliased Thin.IRQ_Set_Header :=
+        (Argsz => Interfaces.Unsigned_32 (K.IRQ_Set_Header_Size),
+         Flags => Interfaces.Unsigned_32 (K.IRQ_Set_Data_None) or Action,
+         Index => Interfaces.Unsigned_32 (Index),
+         Start => 0,
+         Count => 1);
+   begin
+      if Sys.Ioctl (Sys.Raw_FD (Device.Value),
+                    C.unsigned_long (K.Device_Set_IRQs),
+                    Request'Address) /= 0
+      then
+         raise Interrupt_Error with
+           "VFIO_DEVICE_SET_IRQS failed " & Verb & " index"
+           & IRQ_Index'Image (Index) & Errno_Advice;
+      end if;
+   end Set_Mask_State;
+
+   ------------
+   -- Unmask --
+   ------------
+
+   procedure Unmask (Device : Device_FD; Index : IRQ_Index) is
+   begin
+      Set_Mask_State
+        (Device, Index,
+         Interfaces.Unsigned_32 (K.IRQ_Set_Action_Unmask), "unmasking");
+   end Unmask;
+
+   ----------
+   -- Mask --
+   ----------
+
+   procedure Mask (Device : Device_FD; Index : IRQ_Index) is
+   begin
+      Set_Mask_State
+        (Device, Index,
+         Interfaces.Unsigned_32 (K.IRQ_Set_Action_Mask), "masking");
+   end Mask;
+
    -------------
    -- Disable --
    -------------

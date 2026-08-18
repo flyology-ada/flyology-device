@@ -1,6 +1,7 @@
 with Flyology_VFIO.Regions;
 with Interfaces;
 use type Interfaces.Unsigned_32;
+use type Interfaces.Unsigned_64;
 
 --  QEMU's educational PCI device.
 --
@@ -109,6 +110,29 @@ package Flyology_VFIO_QEMU.Edu is
 
    --  How large the device's own buffer is.
    Device_Buffer_Size : constant U64 := 4096;
+
+   --  The widest bus address this device can emit.
+   --
+   --  edu carries a DMA mask, twenty-eight bits by default, and it does not
+   --  reject an address wider than that: it silently masks it and issues
+   --  the transfer against the result. An I/O virtual address of four
+   --  gibibytes becomes zero, the IOMMU refuses the access because nothing
+   --  is mapped there, and the transfer completes having moved nothing.
+   --
+   --  That is worth dwelling on, because it is the shape of the whole
+   --  problem this repository exists for. Every layer behaved: the mapping
+   --  was made, the registers were kept, the transfer ran, the device
+   --  reported back exactly what it was given. The address was wrong only
+   --  in a way the device chose not to mention. A real device with a
+   --  narrow DMA mask does the same thing, and on a machine with no IOMMU
+   --  to refuse the truncated address it would have written to whatever
+   --  physical memory happened to be at the masked address instead.
+   --
+   --  A device's DMA width is therefore part of what constrains which
+   --  IOVAs a driver may use, alongside the IOMMU's own input address size
+   --  and the ranges the platform reserves. Transfer refuses an address
+   --  that does not fit rather than letting it be masked.
+   Maximum_DMA_Address : constant U64 := 2 ** 28 - 1;
 
    ---------------------------------------------------------------------
    --  Operations
@@ -227,7 +251,8 @@ package Flyology_VFIO_QEMU.Edu is
    --  @param Announce Whether the device should raise an interrupt at the end
    --  @param Attempts How many times to poll before giving up
    --  @param Pause_Microseconds How long to wait between polls
-   --  @exception Device_Misbehaved The transfer did not finish in time
+   --  @exception Device_Misbehaved The transfer did not finish in time, or
+   --    an address is wider than the device can emit
    procedure Transfer
      (BAR         : Regions.Window;
       Source      : U64;
