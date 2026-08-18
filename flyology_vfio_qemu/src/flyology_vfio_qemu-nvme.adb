@@ -389,14 +389,15 @@ package body Flyology_VFIO_QEMU.NVMe is
    ---------------------------
 
    procedure Write_Block_Command
-     (Submission  : Queue_Location;
-      Slot        : Natural;
-      Identifier  : U16;
-      Opcode      : IO_Opcode;
-      Namespace   : Namespace_Identifier;
-      First_Block : U64;
-      Blocks      : Positive;
-      Address     : U64)
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Opcode       : IO_Opcode;
+      Namespace    : Namespace_Identifier;
+      First_Block  : U64;
+      Blocks       : Positive;
+      Address      : U64;
+      Continuation : U64 := 0)
    is
    begin
       --  The block count is held one less than the real number, which is
@@ -406,6 +407,7 @@ package body Flyology_VFIO_QEMU.NVMe is
         (Submission, Slot, Opcode, Identifier,
          Namespace => Namespace,
          DPTR1 => Address,
+         DPTR2 => Continuation,
          CDW10 => U32 (First_Block and 16#FFFF_FFFF#),
          CDW11 => U32 (Interfaces.Shift_Right (First_Block, 32)),
          CDW12 => U32 (Blocks - 1));
@@ -1183,5 +1185,76 @@ package body Flyology_VFIO_QEMU.NVMe is
                   or Interfaces.Shift_Left
                        (U32 (Copy_Format'Pos (Format)), 8));
    end Write_Copy_Command;
+
+   ------------------------------
+   -- Describe_Transfer --
+   ------------------------------
+
+   function Describe_Transfer
+     (Buffer      : U64;
+      Bytes       : Positive;
+      Page_Bytes  : Positive;
+      List_Host   : System.Address;
+      List_Device : U64) return Data_Pointers
+   is
+      Span  : constant U64 := U64 (Page_Bytes);
+      Pages : constant Natural :=
+        Natural ((U64 (Bytes) + Span - 1) / Span);
+   begin
+      if (Buffer mod Span) /= 0 then
+         raise Device_Misbehaved with
+           "a transfer buffer must start on a page boundary";
+      end if;
+
+      if Pages <= 1 then
+         --  Everything is inside the first page, and the second pointer
+         --  means nothing. Leaving a stale address there is harmless and
+         --  leaving a wrong one is not, so it is zero.
+         return (First => Buffer, Second => 0);
+      elsif Pages = 2 then
+         return (First => Buffer, Second => Buffer + Span);
+      end if;
+
+      if Pages - 1 > Page_List_Capacity (Page_Bytes) then
+         raise Device_Misbehaved with
+           "a transfer of" & Positive'Image (Bytes)
+           & " bytes needs a chained page list, which this does not build";
+      end if;
+
+      for Index in 0 .. Pages - 2 loop
+         --  The list names every page after the first. The first stays in
+         --  the first pointer, so entry zero is the second page and an
+         --  off-by-one here transfers the whole buffer shifted by a page.
+         Put_64 (List_Host, Index * 8, Buffer + Span * U64 (Index + 1));
+      end loop;
+
+      return (First => Buffer, Second => List_Device);
+   end Describe_Transfer;
+
+   -----------------------------------
+   -- Maximum_Transfer_Bytes --
+   -----------------------------------
+
+   function Maximum_Transfer_Bytes
+     (Data : System.Address; Capabilities : U64) return Natural
+   is
+      Cell : Byte_Array (0 .. 0) with Import,
+        Address => Data + SSE.Storage_Offset (77);
+      Shift : constant Natural := Natural (Cell (0));
+   begin
+      if Shift = 0 then
+         return 0;
+      end if;
+      --  Guard the shift rather than the result: a controller claiming a
+      --  transfer of two to the two hundredth bytes is not one to take at
+      --  its word, and computing it would overflow before it could be
+      --  disbelieved.
+      if Shift > 20 then
+         raise Device_Misbehaved with
+           "the controller claims a maximum transfer of two to the"
+           & Natural'Image (Shift) & " pages";
+      end if;
+      return Minimum_Page_Size (Capabilities) * (2 ** Shift);
+   end Maximum_Transfer_Bytes;
 
 end Flyology_VFIO_QEMU.NVMe;

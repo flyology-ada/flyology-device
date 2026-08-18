@@ -1007,15 +1007,89 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @param Blocks How many blocks, counted from one
    --  @param Address Where the data lives, as a device address
    procedure Write_Block_Command
-     (Submission  : Queue_Location;
-      Slot        : Natural;
-      Identifier  : U16;
-      Opcode      : IO_Opcode;
-      Namespace   : Namespace_Identifier;
-      First_Block : U64;
-      Blocks      : Positive;
-      Address     : U64)
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Opcode       : IO_Opcode;
+      Namespace    : Namespace_Identifier;
+      First_Block  : U64;
+      Blocks       : Positive;
+      Address      : U64;
+      Continuation : U64 := 0)
      with Pre => Submission.Kind = Namespace_IO;
+
+   ---------------------------------------------------------------------
+   --  Describing a buffer larger than a page
+   ---------------------------------------------------------------------
+
+   --  The two data pointers a command carries.
+   --
+   --  NVMe has no scatter-gather list in its base form; it has two
+   --  pointers and a rule that changes what the second one means depending
+   --  on how much is being transferred. That rule is the reason a driver
+   --  that works for a single block can fail for sixteen: the first pointer
+   --  is the same in both cases and the second is not the same kind of
+   --  thing.
+   --
+   --  @field First Where the transfer starts
+   --  @field Second Unused, the next page, or a list of pages
+   type Data_Pointers is record
+      First  : U64 := 0;
+      Second : U64 := 0;
+   end record;
+
+   --  How many pages one page-list page can name.
+   --
+   --  A list longer than this has to be chained, its last entry pointing at
+   --  another list page. Nothing here does that: a transfer needing more
+   --  than one list page is refused rather than described wrongly.
+   --
+   --  @param Page_Bytes The controller's page size
+   --  @return How many entries fit
+   function Page_List_Capacity (Page_Bytes : Positive) return Positive
+     is (Page_Bytes / 8);
+
+   --  Describes a transfer buffer to the controller, building a page list
+   --  if the transfer needs one.
+   --
+   --  The three cases, which are the whole of the rule: a transfer ending
+   --  inside the first page needs no second pointer at all; one ending
+   --  inside the second page puts that page in the second pointer; anything
+   --  longer puts a list of every page after the first there instead. A
+   --  driver that only ever transfers one block never meets the second or
+   --  third case and is not thereby correct.
+   --
+   --  The buffer must start on a page boundary. The specification allows an
+   --  offset within the first page and nothing here needs one, so requiring
+   --  alignment removes a case rather than hiding it.
+   --
+   --  @param Buffer Where the data lives, as a device address
+   --  @param Bytes How many bytes the transfer covers
+   --  @param Page_Bytes The controller's page size
+   --  @param List_Host Where a page list may be built, in this process
+   --  @param List_Device The same place as a device address
+   --  @return The two pointers to put in the command
+   --  @exception Device_Misbehaved The transfer needs more than one list
+   --    page, or the buffer is not page-aligned
+   function Describe_Transfer
+     (Buffer      : U64;
+      Bytes       : Positive;
+      Page_Bytes  : Positive;
+      List_Host   : System.Address;
+      List_Device : U64) return Data_Pointers;
+
+   --  The largest transfer the controller will accept, in bytes.
+   --
+   --  MDTS is held as a power of two multiplying the smallest page the
+   --  controller supports, and zero means it states no limit at all rather
+   --  than a limit of one page — the one place in this structure where zero
+   --  does not mean zero.
+   --
+   --  @param Data Address of the Identify Controller data
+   --  @param Capabilities The capabilities register, for the page size
+   --  @return The limit in bytes, or zero when the controller states none
+   function Maximum_Transfer_Bytes
+     (Data : System.Address; Capabilities : U64) return Natural;
 
    --  Writes a command reading or changing a feature.
    --

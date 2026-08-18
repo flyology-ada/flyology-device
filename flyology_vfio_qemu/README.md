@@ -152,6 +152,12 @@ controller-scope feature named with a namespace identifier is refused, and a
 per-namespace feature without one likewise. Both refusals are correct and
 both are easy to read as the controller being wrong.
 
+**Transfers longer than two pages need a page list, and nothing chains
+them.** One list page names five hundred and twelve pages, so a single
+command here moves at most two mebibytes however large the controller says
+its own limit is. A transfer needing a chained list is refused rather than
+described wrongly.
+
 **Only the identify directive exists.** A controller must have the
 directive that describes the other directives, and QEMU's has nothing else
 to describe: streams are not implemented, so there is no directive that can
