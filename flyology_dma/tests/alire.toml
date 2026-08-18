@@ -1,0 +1,20 @@
+name = "flyology_dma_tests"
+description = "Test programs for flyology_dma"
+version = "0.1.0-dev"
+licenses = "MIT OR Apache-2.0"
+authors = ["Yurii Rashkovskii"]
+maintainers = ["Yurii Rashkovskii <yrashk@gmail.com>"]
+maintainers-logins = ["yrashk"]
+executables = [
+  "scalar_tests",
+  "region_tests",
+  "mapper_tests",
+  "address_space_tests",
+  "pool_tests",
+]
+
+[[depends-on]]
+flyology_dma = "*"
+
+[[pins]]
+flyology_dma = { path = ".." }

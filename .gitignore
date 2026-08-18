@@ -1,0 +1,59 @@
+/build/
+
+/flyology_dma/alire/
+/flyology_dma/config/
+/flyology_dma/obj/
+/flyology_dma/lib/
+/flyology_dma/bin/
+/flyology_dma/docs/api/
+/flyology_dma/tests/alire/
+/flyology_dma/tests/config/
+/flyology_dma/tests/obj/
+/flyology_dma/tests/bin/
+/flyology_dma/showcases/alire/
+/flyology_dma/showcases/config/
+/flyology_dma/showcases/obj/
+/flyology_dma/showcases/bin/
+/flyology_dma/proof/alire/
+/flyology_dma/proof/config/
+/flyology_dma/proof/obj/
+/flyology_dma/proof/gnatprove/
+
+/flyology_vfio/alire/
+/flyology_vfio/config/
+/flyology_vfio/obj/
+/flyology_vfio/lib/
+/flyology_vfio/bin/
+/flyology_vfio/docs/api/
+/flyology_vfio/tests/alire/
+/flyology_vfio/tests/config/
+/flyology_vfio/tests/obj/
+/flyology_vfio/tests/bin/
+/flyology_vfio/showcases/alire/
+/flyology_vfio/showcases/config/
+/flyology_vfio/showcases/obj/
+/flyology_vfio/showcases/bin/
+
+*.ali
+*.o
+*.a
+*.dSYM/
+
+#  GNAT's binder writes b~<main>.ads and b~<main>.adb next to the objects it
+#  is binding. They are generated Ada source, so nothing that filters by
+#  extension or by "is it text" will catch them; they have to be named.
+b~*.ads
+b~*.adb
+
+#  gnatmake writes an executable into the current directory unless it is
+#  told otherwise, so a build run from the repository root leaves the test
+#  and showcase programs here. They belong in each crate's bin/, which is
+#  ignored above; these entries stop a stray root-level build from being
+#  committed.
+/scalar_tests
+/address_space_tests
+/region_tests
+/mapper_tests
+/pool_tests
+/host_readiness
+/region_walkthrough

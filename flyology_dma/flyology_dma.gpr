@@ -1,0 +1,45 @@
+project Flyology_DMA is
+
+   type Build_Mode_Kind is ("checked", "release");
+   Build_Mode : Build_Mode_Kind :=
+     external ("FLYOLOGY_DMA_BUILD_MODE", "checked");
+
+   --  The syscall surface differs by platform: Linux has MAP_HUGETLB and
+   --  MAP_LOCKED, and Darwin has neither. Rather than test the platform at
+   --  run time, each platform supplies its own body for Flyology_DMA.Thin,
+   --  and the Darwin body refuses hugepage backings by name. Darwin support
+   --  exists so the portable units can be built and tested on a development
+   --  host; it is not a supported target for driver work.
+   type Platform_Kind is ("linux", "darwin");
+   Platform : Platform_Kind := external ("FLYOLOGY_DMA_PLATFORM", "linux");
+   Platform_Source_Dir := "src/" & Platform;
+
+   for Languages use ("Ada");
+   for Source_Dirs use ("src", Platform_Source_Dir);
+   for Object_Dir use "obj";
+   for Library_Name use "flyology_dma";
+   for Library_Dir use "lib";
+   for Library_Kind use "static";
+   for Create_Missing_Dirs use "True";
+
+   package Compiler is
+      Common :=
+        ("-gnat2022", "-gnatwa", "-gnatwJ", "-fstack-check",
+         "-fno-strict-aliasing");
+
+      case Build_Mode is
+         when "checked" =>
+            --  Preconditions carry the alignment and window invariants that
+            --  keep a device from writing outside a mapped region, so the
+            --  checked mode is the one the test suite uses.
+            for Default_Switches ("Ada") use Common & ("-O1", "-gnata");
+         when "release" =>
+            for Default_Switches ("Ada") use Common & ("-O2");
+      end case;
+   end Compiler;
+
+   package Documentation is
+      for Output_Dir ("html") use "docs/api";
+   end Documentation;
+
+end Flyology_DMA;

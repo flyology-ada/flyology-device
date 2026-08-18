@@ -1,0 +1,25 @@
+name = "flyology_dma"
+description = "DMA-capable host memory: hugepage regions, IOVA space, buffer pools"
+version = "0.1.0-dev"
+licenses = "MIT OR Apache-2.0"
+authors = ["Yurii Rashkovskii"]
+maintainers = ["Yurii Rashkovskii <yrashk@gmail.com>"]
+maintainers-logins = ["yrashk"]
+website = "https://flyology.org/"
+project-files = ["flyology_dma.gpr"]
+tags = ["ada", "dma", "hugepages", "iommu", "iova", "driver"]
+
+[build-switches]
+"*".ada_version = "Ada2022"
+development.optimization = "Debug"
+development.compile_checks = "Errors"
+release.optimization = "Performance"
+release.compile_checks = "Warnings"
+
+[[actions]]
+type = "test"
+command = ["./scripts/test.sh"]
+
+[gpr-set-externals.'case(os)']
+linux = { FLYOLOGY_DMA_PLATFORM = "linux" }
+macos = { FLYOLOGY_DMA_PLATFORM = "darwin" }

@@ -1,0 +1,14 @@
+with "../flyology_dma.gpr";
+
+project Flyology_DMA_Showcases is
+   for Source_Dirs use ("src");
+   for Object_Dir use "obj";
+   for Exec_Dir use "bin";
+   for Main use ("host_readiness.adb", "region_walkthrough.adb");
+   for Create_Missing_Dirs use "True";
+
+   package Compiler is
+      for Default_Switches ("Ada") use
+        ("-gnat2022", "-gnata", "-gnatwa", "-gnatwJ", "-g");
+   end Compiler;
+end Flyology_DMA_Showcases;

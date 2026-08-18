@@ -1,0 +1,16 @@
+name = "flyology_dma_proof"
+description = "Development-only SPARK proof harness for flyology_dma"
+version = "0.1.0-dev"
+licenses = "MIT OR Apache-2.0"
+authors = ["Yurii Rashkovskii"]
+maintainers = ["Yurii Rashkovskii <yrashk@gmail.com>"]
+maintainers-logins = ["yrashk"]
+tags = ["ada", "dma", "spark", "proof"]
+project-files = ["dma_policy.gpr"]
+
+[[depends-on]]
+flyology_dma = "*"
+gnatprove = "^16.1.0"
+
+[[pins]]
+flyology_dma = { path = ".." }
