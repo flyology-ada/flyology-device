@@ -28,6 +28,14 @@ RUN curl -fsSL -o /tmp/alr.zip \
  && rm -rf /tmp/alr /tmp/alr.zip \
  && alr version
 
+#  The Flyology index, which carries the runtime crate and its siblings.
+#  Added before the community index so its versions win, matching what the
+#  repository's CI does.
+RUN alr -n index --reset-community \
+ && alr -n index --add=git+https://github.com/flyology-ada/alire-index.git \
+      --name=flyology --before=community \
+ && alr -n index --list
+
 ARG GNAT_VERSION=15.3.1
 ARG GPRBUILD_VERSION=25.0.1
 RUN alr -n toolchain --select "gnat_native=${GNAT_VERSION}" \

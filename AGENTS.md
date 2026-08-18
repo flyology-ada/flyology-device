@@ -19,14 +19,25 @@ driver crates join as peers rather than as children of an existing one.
   group and device lifecycle, PCI BAR mapping, MMIO register access, and
   interrupt delivery. Implements the `Mapper` interface that `flyology_dma`
   declares.
+- `flyology_vfio_runtime` — waiting for a VFIO interrupt on a Flyology event
+  loop. One waiter, in a crate of its own so that the runtime's licence and
+  its custom Ada runtime stay out of the crate that binds an ioctl.
 - `flyology_vfio_qemu` — a bring-up harness that drives QEMU's virtual PCI
-  devices through the other two. It is not a library anything should depend
+  devices through the others. It is not a library anything should depend
   on: it exists to make the layers below it prove themselves against a
-  device, which neither can do alone.
+  device, which none of them can do alone.
 
-The dependency runs one way, `flyology_vfio_qemu -> flyology_vfio ->
-flyology_dma`, and there is no cycle. `flyology_dma` sits at the bottom and
-depends on nothing in this repository.
+The dependency runs one way — `flyology_vfio_qemu` and
+`flyology_vfio_runtime` both onto `flyology_vfio`, and that onto
+`flyology_dma` — and there is no cycle. `flyology_dma` sits at the bottom
+and depends on nothing in this repository.
+
+`flyology_vfio_runtime` is the only crate here that depends on the
+`flyology` runtime, and that is deliberate rather than incidental: the
+runtime brings a `GPL-3.0-or-later` component and a custom Ada runtime with
+it, and confining both to one clearly named peer is what keeps the rest of
+the repository free of them. If a second crate needs the runtime, that is a
+decision to take openly, not one to discover after it has leaked.
 
 If a change to `flyology_dma` seems to need VFIO, reshape the interface
 instead. That interface is what lets other backends — VFIO no-IOMMU mode,
@@ -54,12 +65,20 @@ place without the region and pool code noticing.
   children such as `Flyology_DMA.Regions`, `Flyology_VFIO` with children
   such as `Flyology_VFIO.Thin`, and `Flyology_VFIO_QEMU` with one child per
   device it drives.
-- Never introduce a `Flyology` parent unit in either crate. A parent package
-  here collides when the crate is used alongside the Flyology runtime, which
-  is why every standalone crate in this ecosystem uses a single underscored
-  root. `flyology_iri`, `flyology_rdf`, and `flyology_simd` all follow this;
-  only crates that depend on the `flyology` runtime crate itself, such as
-  `flyology_http`, use `Flyology.X` child units.
+- Never introduce a `Flyology` parent unit in any crate here. A parent
+  package collides when the crate is used alongside the Flyology runtime,
+  which is why every standalone crate in this ecosystem uses a single
+  underscored root. `flyology_iri`, `flyology_rdf`, and `flyology_simd` all
+  follow this; only crates that depend on the `flyology` runtime crate
+  itself, such as `flyology_http`, use `Flyology.X` child units.
+- A crate may add children to another crate's root, and
+  `flyology_vfio_runtime` does: it holds `Flyology_VFIO.Flyology_Runtime`.
+  The test is which package owns the concept. That one implements
+  `Flyology_VFIO.Interrupts.Waiter`, so it belongs in `Flyology_VFIO`'s
+  namespace, and putting it under the runtime's root instead would have had
+  the runtime claiming a VFIO concept it knows nothing about. A consequence
+  worth knowing: such a child appears in neither the parent crate's
+  documentation nor a standalone build of it.
 
 ## Platform
 

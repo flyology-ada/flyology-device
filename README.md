@@ -9,6 +9,7 @@ Both crates here are experimental. Neither has driven real hardware.
 | --- | --- |
 | [`flyology_dma`](flyology_dma/) | Hugepage-backed regions, IOVA management, and buffer pools whose handles carry both the host and device addresses of the same bytes |
 | [`flyology_vfio`](flyology_vfio/) | The Linux VFIO userspace interface: container, group and device lifecycle, BAR mapping, MMIO access, and the `Mapper` implementation that closes the loop with `flyology_dma` |
+| [`flyology_vfio_runtime`](flyology_vfio_runtime/) | Waiting for a VFIO interrupt on a Flyology event loop, in a crate of its own so the runtime's licence and custom Ada runtime stay out of the rest |
 | [`flyology_vfio_qemu`](flyology_vfio_qemu/) | A bring-up harness driving QEMU's virtual PCI devices through the other two, so that they are tested against a device rather than only against the kernel's refusals |
 
 The repository root is not a crate. Each crate is a peer with its own

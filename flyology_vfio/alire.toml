@@ -1,5 +1,5 @@
 name = "flyology_vfio"
-description = "Linux VFIO userspace device access: BARs, MMIO, IOMMU mapping, interrupts"
+description = "Linux VFIO userspace device access: BARs, MMIO, IOMMU, interrupts"
 version = "0.1.0-dev"
 licenses = "MIT OR Apache-2.0"
 authors = ["Yurii Rashkovskii"]

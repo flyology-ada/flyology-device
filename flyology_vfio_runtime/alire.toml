@@ -1,21 +1,20 @@
-name = "flyology_vfio_qemu"
-description = "Bring-up harness driving QEMU virtual PCI devices via VFIO"
+name = "flyology_vfio_runtime"
+description = "Waiting for VFIO interrupts on a Flyology event loop"
 version = "0.1.0-dev"
 licenses = "MIT OR Apache-2.0"
 authors = ["Yurii Rashkovskii"]
 maintainers = ["Yurii Rashkovskii <yrashk@gmail.com>"]
 maintainers-logins = ["yrashk"]
 website = "https://flyology.org/"
-project-files = ["flyology_vfio_qemu.gpr"]
-tags = ["ada", "vfio", "qemu", "pci", "testing"]
+project-files = ["flyology_vfio_runtime.gpr"]
+tags = ["ada", "vfio", "runtime", "interrupts"]
 
 [[depends-on]]
 flyology_vfio = "~0.1.0-dev"
-flyology_dma = "~0.1.0-dev"
+flyology = ">=0.1.0 & <0.2.0"
 
 [[pins]]
 flyology_vfio = { path = "../flyology_vfio" }
-flyology_dma = { path = "../flyology_dma" }
 
 [build-switches]
 "*".ada_version = "Ada2022"
