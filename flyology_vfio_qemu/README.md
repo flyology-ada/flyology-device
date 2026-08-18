@@ -152,6 +152,19 @@ controller-scope feature named with a namespace identifier is refused, and a
 per-namespace feature without one likewise. Both refusals are correct and
 both are easy to read as the controller being wrong.
 
+**A filesystem's view and the driver's view of one namespace agree.** A
+file written through an ordinary file interface is found on the medium by
+this driver, reading blocks and looking for the bytes rather than parsing
+any filesystem; the driver writes different bytes over them, and the file
+then reads back as what the driver wrote. The namespace is handed between
+the kernel and vfio-pci between turns rather than shared, because a disk
+has one owner at a time.
+
+**A block device's name is not its namespace identifier.** Namespace three
+starts detached, so it takes an identifier and no name, and namespace four
+arrives as `nvme0n3` — until it does not. The harness selects by reading
+each device's `nsid`.
+
 **Transfers longer than two pages need a page list, and nothing chains
 them.** One list page names five hundred and twelve pages, so a single
 command here moves at most two mebibytes however large the controller says

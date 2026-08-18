@@ -21,6 +21,7 @@ executables = [
   "e1000e_filter_tests",
   "e1000e_queues_tests",
   "e1000e_peer_tests",
+  "nvme_file_tests",
 ]
 
 [[depends-on]]

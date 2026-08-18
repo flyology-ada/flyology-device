@@ -111,10 +111,12 @@ devices=${FLYOLOGY_DEVICE_VM_DEVICES:-"
   -drive id=nvmedisk,file=$state/nvme.qcow2,if=none,format=qcow2
   -drive id=nvmezoned,file=$state/nvme-zoned.qcow2,if=none,format=qcow2
   -drive id=nvmespare,file=$state/nvme-spare.qcow2,if=none,format=qcow2
+  -drive id=nvmefat,file=$state/nvme-fat.qcow2,if=none,format=qcow2
   -device nvme,subsys=nvmesubsys,serial=$device_serial,msix_qsize=8
   -device nvme-ns,drive=nvmedisk,nsid=1
   -device nvme-ns,drive=nvmezoned,nsid=2,zoned=on,zoned.zone_size=1M,zoned.zone_capacity=1M
   -device nvme-ns,drive=nvmespare,nsid=3,detached=on
+  -device nvme-ns,drive=nvmefat,nsid=4
   -netdev hubport,id=hubwire,hubid=1
   -device e1000e,netdev=hubwire,mac=$device_mac,romfile=
   -netdev hubport,id=hubpeer,hubid=1
@@ -166,7 +168,7 @@ do_up () {
   #  Reservations have no such option: QEMU's NVMe advertises the three
   #  reservation commands and offers no configuration under which they
   #  work, so they stay unexercised and the README says why.
-  for backing in nvme nvme-zoned nvme-spare; do
+  for backing in nvme nvme-zoned nvme-spare nvme-fat; do
     [ -f "$state/$backing.qcow2" ] || qemu-img create -q -f qcow2 \
       "$state/$backing.qcow2" 64M
   done

@@ -145,6 +145,63 @@ for suite in edu_tests container_sharing_tests pci_testdev_tests \
   run_in_guest "$corpus /mnt/share/$suite" || status=1
 done
 
+#  The filesystem suite, which is three turns rather than one.
+#
+#  A disk has one owner at a time. The kernel cannot mount a namespace this
+#  driver has taken, and this driver must not write to one the kernel has
+#  mounted, so the namespace is handed between them rather than shared. Each
+#  turn runs with the other side detached, which is not a simplification —
+#  it is the only correct way for two drivers to use one disk.
+#
+#  Done here rather than by the test, because binding a device to a driver
+#  belongs to whoever owns the machine. This one is disposable and exists to
+#  be changed; nothing in the crates does anything of the kind.
+nvme_address=${FLYOLOGY_DEVICE_VM_NVME:-0000:00:05.0}
+
+give_nvme_to () {
+  run_in_guest "d=/sys/bus/pci/devices/$nvme_address
+    [ -e \$d/driver ] && basename \$(readlink \$d/driver) > /tmp/held || true
+    [ -e \$d/driver ] && echo $nvme_address > \$d/driver/unbind 2>/dev/null
+    echo $1 > \$d/driver_override
+    echo $nvme_address > /sys/bus/pci/drivers/$1/bind 2>/dev/null
+    sleep 1
+    printf 'nvme is now with %s\n' \$(basename \$(readlink \$d/driver))"
+}
+
+printf '\n== nvme_file_tests ==\n'
+give_nvme_to nvme
+#  Found by its namespace identifier rather than by its name, because they
+#  are not the same number and nothing says they should be: a namespace
+#  that starts detached takes an identifier and no name, so namespace four
+#  arrives as nvme0n3. Guessing the name gets the wrong disk or none.
+find_namespace='n=""
+  for b in /sys/block/nvme*; do
+    [ -f "$b/nsid" ] || continue
+    [ "$(cat $b/nsid)" = "4" ] || continue
+    n=/dev/$(basename $b)
+  done'
+
+run_in_guest "$find_namespace
+  [ -b \"\$n\" ] || { echo 'no block device for namespace 4'; exit 1; }
+  mkdir -p /mnt/nvme
+  blkid \"\$n\" >/dev/null 2>&1 || mkfs.vfat -n FLYOLOGY \"\$n\" >/dev/null
+  mount \"\$n\" /mnt/nvme
+  printf 'namespace 4 is %s, mounted at /mnt/nvme\n' \"\$n\"" || status=1
+run_in_guest "$corpus /mnt/share/nvme_file_tests write" || status=1
+run_in_guest 'sync; umount /mnt/nvme; echo unmounted' || status=1
+
+give_nvme_to vfio-pci
+run_in_guest "$corpus /mnt/share/nvme_file_tests find" || status=1
+
+give_nvme_to nvme
+run_in_guest "$find_namespace
+  mount \"\$n\" /mnt/nvme && echo remounted" || status=1
+run_in_guest "$corpus /mnt/share/nvme_file_tests read" || status=1
+run_in_guest 'umount /mnt/nvme 2>/dev/null; echo done' || status=1
+
+#  Left as the other suites expect to find it.
+give_nvme_to vfio-pci
+
 printf '\n== dma_region_walkthrough ==\n'
 run_in_guest /mnt/share/dma_region_walkthrough || status=1
 
