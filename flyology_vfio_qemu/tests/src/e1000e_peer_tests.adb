@@ -21,12 +21,30 @@
 --  reset proves the same for TCP, where the checksum is not optional and a
 --  wrong one is indistinguishable from a frame that never arrived.
 --
+--  Above the transport there is a further step, and this test takes it
+--  itself rather than needing a program alongside. Those replies are ones a
+--  stack produces on its own; nothing above the transport layer ever ran.
+--  So the test opens a socket of its own with Flyology's socket interface
+--  and binds it to a port on the peer's address, and then sends a datagram
+--  to that port through the device it is driving.
+--
+--  The path that datagram takes is the point. It is built by hand here, put
+--  on the wire by a driver in this repository, carried across a virtual
+--  hub, received by the guest kernel on a different network card, routed up
+--  through its UDP layer, delivered into a socket, read by an ordinary Ada
+--  program, written back, and sent out again the same way in reverse. Both
+--  ends are this process and nothing about the journey is shortened by
+--  that: the two halves meet through a real stack and a real wire rather
+--  than through a device agreeing with itself.
+--
 --  It is also the only place receive-side scaling can be observed, because
 --  this device hashes frames arriving from outside and not frames it sent
 --  itself.
 
 with Ada.Environment_Variables;
 with Ada.Exceptions;
+with Ada.Streams;
+with Flyology.IO.Sockets;
 with Flyology_DMA;
 with Flyology_DMA.Mappers;
 with Flyology_DMA.Regions;
@@ -120,7 +138,89 @@ procedure E1000E_Peer_Tests is
    --  frames arrive that have nothing to do with the check in progress and
    --  have to be walked past rather than mistaken for a failure.
    type Expected is
-     (Address_Reply, Echo_Reply, Port_Unreachable, Connection_Refused);
+     (Address_Reply, Echo_Reply, Port_Unreachable, Connection_Refused,
+      Socket_Answer);
+
+   package Sockets renames Flyology.IO.Sockets;
+   use type Ada.Streams.Stream_Element_Offset;
+
+   --  Where the socket half of this test listens, and the port the raw half
+   --  sends from. Both are chosen here rather than left to the system so
+   --  that a datagram going missing cannot be mistaken for one arriving
+   --  somewhere unexpected.
+   Echo_Port  : constant Sockets.Port := 7_777;
+   Reply_Port : constant := 5_002;
+
+   --  What the echo puts in front of what it was sent. A plain echo cannot
+   --  be told apart from the request returning some other way — a device
+   --  looping frames back, a hub reflecting them. A reply that differs from
+   --  the request in a way only this program could produce can.
+   Marker : constant String := "FLY:";
+
+   --  The socket half. It binds before the raw half sends anything, and
+   --  stops when asked, because a task still waiting on a socket would keep
+   --  the program alive after its checks had finished.
+   task Echo_Socket is
+      entry Listening;
+      entry Stop;
+   end Echo_Socket;
+
+   task body Echo_Socket is
+      Socket : Sockets.Socket_Type;
+      Buffer : Ada.Streams.Stream_Element_Array (1 .. 2_048);
+      Reply  : Ada.Streams.Stream_Element_Array (1 .. 2_048);
+      Last   : Ada.Streams.Stream_Element_Offset;
+      Sent   : Ada.Streams.Stream_Element_Offset;
+      From   : Sockets.Endpoint;
+      Asked  : Boolean := False;
+   begin
+      Sockets.Create_Socket (Socket, Sockets.IPv4, Sockets.Socket_Datagram);
+      Sockets.Set_Socket_Option
+        (Socket, (Name => Sockets.Reuse_Address, Enabled => True));
+      Sockets.Set_Socket_Option
+        (Socket, (Name => Sockets.Receive_Timeout, Timeout => 0.25));
+      Sockets.Bind_Socket
+        (Socket, Sockets.Network_Endpoint (Sockets.Any_IPv4, Echo_Port));
+      accept Listening;
+
+      while not Asked loop
+         begin
+            Sockets.Receive_Socket (Socket, Buffer, Last, From);
+            if Last >= Buffer'First then
+               for Index in Marker'Range loop
+                  Reply (Ada.Streams.Stream_Element_Offset
+                           (Index - Marker'First + 1)) :=
+                    Character'Pos (Marker (Index));
+               end loop;
+               Reply (Marker'Length + 1 .. Marker'Length + Last) :=
+                 Buffer (1 .. Last);
+               Sockets.Send_Socket
+                 (Socket, Reply (1 .. Marker'Length + Last), Sent, From);
+            end if;
+         exception
+            --  A receive that timed out rather than failing. There is no
+            --  way to tell those apart through this interface, and for a
+            --  test peer there is no need to.
+            when others => null;
+         end;
+
+         select
+            accept Stop;
+            Asked := True;
+         else
+            null;
+         end select;
+      end loop;
+
+      Sockets.Close_Socket (Socket);
+   exception
+      when others =>
+         select
+            accept Stop;
+         or
+            delay 5.0;
+         end select;
+   end Echo_Socket;
 begin
    declare
       Where : constant String := Find (NIC.Vendor_ID, NIC.Device_ID);
@@ -375,6 +475,29 @@ begin
                   return Finish_IPv4 (17, Length);
                end Build_UDP;
 
+               --  A datagram aimed at the socket this same program has
+               --  open. Nothing about it is special; the port is one the
+               --  other half of this test is listening on rather than one
+               --  nothing is.
+               function Build_To_Socket return Positive is
+                  Payload : constant String := "flyology-device";
+                  Length  : constant Natural := 8 + Payload'Length;
+               begin
+                  Start_Frame (16#0800#);
+                  Put_16_At (Trans_At, Reply_Port);
+                  Put_16_At (Trans_At + 2, U16 (Echo_Port));
+                  Put_16_At (Trans_At + 4, U16 (Length));
+                  for Index in Payload'Range loop
+                     Frame (Trans_At + 8 + Index - Payload'First) :=
+                       U8 (Character'Pos (Payload (Index)));
+                  end loop;
+                  Put_16_At
+                    (Trans_At + 6,
+                     Folded (Word_Sum (Trans_At, Length)
+                             + Pseudo_Header (17, U32 (Length))));
+                  return Finish_IPv4 (17, Length);
+               end Build_To_Socket;
+
                function Build_SYN return Positive is
                   Length : constant := 20;
                begin
@@ -439,6 +562,14 @@ begin
                         return Word (12) = 16#0800#
                           and then Byte (IP_At + 9) = 6
                           and then (Byte (Trans_At + 13) and 16#04#) /= 0;
+                     when Socket_Answer =>
+                        --  A datagram back to the port the raw half sent
+                        --  from, which is a reply and not the request
+                        --  returning: the request went the other way.
+                        return Word (12) = 16#0800#
+                          and then Byte (IP_At + 9) = 17
+                          and then Word (Trans_At + 2) = Reply_Port
+                          and then Word (Trans_At) = U16 (Echo_Port);
                   end case;
                end Matches;
 
@@ -588,6 +719,45 @@ begin
                      & " thing a loopback can never establish");
 
                   ---------------------------------------------------
+                  --  All the way up to a socket, and back
+                  ---------------------------------------------------
+
+                  Echo_Socket.Listening;
+                  Exchange (Build_To_Socket, Socket_Answer,
+                            Found, Queue, Slot);
+                  Harness.Check
+                    (Found,
+                     "a datagram built here, put on the wire by this"
+                     & " driver, and addressed to a socket this same"
+                     & " program has open came back — so it was carried"
+                     & " across the hub, taken up through a kernel that"
+                     & " knows nothing about any of this, delivered into"
+                     & " the socket, and answered");
+
+                  if Found then
+                     declare
+                        Payload_At : constant Natural := Trans_At + 8;
+                        Marked : Boolean := True;
+                     begin
+                        for Index in Marker'Range loop
+                           if Arrived
+                                (Queue, Slot,
+                                 Payload_At + Index - Marker'First)
+                             /= U8 (Character'Pos (Marker (Index)))
+                           then
+                              Marked := False;
+                           end if;
+                        end loop;
+                        Harness.Check
+                          (Marked,
+                           "and it carries what the socket put in front of"
+                           & " it rather than only what was sent, so this"
+                           & " is an answer from a program and not the"
+                           & " request returning by some other path");
+                     end;
+                  end if;
+
+                  ---------------------------------------------------
                   --  Which queue a frame from outside lands on
                   ---------------------------------------------------
 
@@ -641,6 +811,7 @@ begin
       end;
    end;
 
+   Echo_Socket.Stop;
    Harness.Report ("e1000e_peer_tests");
 
 exception

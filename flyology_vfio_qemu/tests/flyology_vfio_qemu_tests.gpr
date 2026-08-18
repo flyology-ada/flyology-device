@@ -1,4 +1,7 @@
 with "../flyology_vfio_qemu.gpr";
+--  For the socket half of e1000e_peer_tests, which talks to the raw half
+--  through a real kernel and a real wire.
+with "flyology.gpr";
 
 project Flyology_VFIO_QEMU_Tests is
    for Source_Dirs use ("src");

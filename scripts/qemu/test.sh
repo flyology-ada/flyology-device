@@ -30,12 +30,17 @@ for project in \
   flyology_dma/tests/flyology_dma_tests.gpr \
   flyology_dma/showcases/flyology_dma_showcases.gpr \
   flyology_vfio/tests/flyology_vfio_tests.gpr \
-  flyology_vfio/showcases/flyology_vfio_showcases.gpr \
-  flyology_vfio_qemu/tests/flyology_vfio_qemu_tests.gpr
+  flyology_vfio/showcases/flyology_vfio_showcases.gpr
 do
   printf "  %s\n" "$project" >&2
   gprbuild -q -p -j0 -P "$project"
 done
+
+#  The device tests are built through Alire rather than gprbuild directly,
+#  because one of them opens a socket with Flyology and so needs a crate
+#  that is fetched from an index rather than found in this repository.
+printf "  %s\n" "flyology_vfio_qemu/tests (through alr)" >&2
+cd flyology_vfio_qemu/tests && alr -n build -- -q -j0
 '
 
 "$repo_root/scripts/check-tree-clean.sh"

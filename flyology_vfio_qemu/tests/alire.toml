@@ -25,6 +25,7 @@ executables = [
 
 [[depends-on]]
 flyology_vfio_qemu = "*"
+flyology = ">=0.1.0 & <0.2.0"
 
 [[pins]]
 flyology_vfio_qemu = { path = ".." }
