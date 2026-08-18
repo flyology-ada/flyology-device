@@ -165,6 +165,13 @@ package Flyology_VFIO.Interrupts is
    --  @param Self The waiter
    --  @param Signals The descriptors to watch
    --  @param Timeout How long to wait; negative means no limit
+   --  A descriptor reported ready stays ready until Take drains it. That
+   --  is how an eventfd works and it is the single easiest way to write a
+   --  driver that appears to hang: waiting again without draining returns
+   --  the same descriptor, and since the lowest ready index wins, the
+   --  first queue is reported forever and the others never. Take what you
+   --  were given before you wait again.
+   --
    --  @return The index of the descriptor that became ready, or zero on
    --    timeout. The lowest index wins when several are ready at once.
    --  @exception Interrupt_Error The wait itself failed
