@@ -177,13 +177,13 @@ procedure NVMe_Coverage_Tests is
 
    Exercised_Admin : constant Admin_Opcode_List :=
      [16#00#, 16#01#, 16#02#, 16#04#, 16#05#, 16#06#, 16#08#, 16#09#,
-      16#0A#];
+      16#0A#, 16#1A#, 16#7C#];
    Exercised_IO : constant IO_Opcode_List :=
      [16#00#, 16#01#, 16#02#, 16#04#, 16#05#, 16#08#, 16#09#, 16#0C#];
 
    --  What the functional suite reached when this floor was last reviewed.
    --  A number below it means coverage has been lost.
-   Admin_Coverage_Floor : constant := 9;
+   Admin_Coverage_Floor : constant := 11;
    IO_Coverage_Floor    : constant := 8;
 
    function Is_Exercised

@@ -404,13 +404,60 @@ package body Flyology_VFIO_QEMU.NVMe is
       Opcode     : Admin_Opcode;
       Feature    : Feature_Identifier;
       Value      : U32 := 0;
-      Namespace  : Namespace_Identifier := No_Namespace)
+      Namespace  : Namespace_Identifier := No_Namespace;
+      Selection  : Feature_Selection := Current;
+      Save       : Boolean := False)
    is
+      --  The selection occupies bits ten and eleven of the tenth word on a
+      --  Get; the save bit is the top bit of the same word on a Set. They
+      --  share a word and mean nothing to the other command, which is why
+      --  both are set unconditionally and only one is ever read.
+      Selected : constant U32 :=
+        Interfaces.Shift_Left
+          (U32 (Feature_Selection'Pos (Selection)), 8);
+      Persisted : constant U32 := (if Save then 2 ** 31 else 0);
    begin
       Write_Admin_Command
         (Submission, Slot, Opcode, Identifier,
-         Namespace => Namespace, CDW10 => U32 (Feature), CDW11 => Value);
+         Namespace => Namespace,
+         CDW10 => U32 (Feature) or Selected or Persisted,
+         CDW11 => Value);
    end Write_Feature_Command;
+
+   --------------------------
+   -- Shutdown_Progress --
+   --------------------------
+
+   function Shutdown_Progress (BAR : Regions.Window) return Natural is
+     (Shutdown_State (Reg.Read_Acquire_32 (BAR, Status_Register)));
+
+   -----------------
+   -- Shut_Down --
+   -----------------
+
+   procedure Shut_Down (BAR : Regions.Window; Attempts : Positive := 20_000)
+   is
+      Polls : Natural := 0;
+   begin
+      Reg.Write_Release_32
+        (BAR, Configuration_Register,
+         Reg.Read_32 (BAR, Configuration_Register)
+         or Configuration_Shutdown_Normal);
+
+      --  Two means complete. One means the controller is still committing,
+      --  which is exactly the state a driver must not mistake for done.
+      while Shutdown_Progress (BAR) /= 2 loop
+         Polls := Polls + 1;
+         Wait_Microseconds (100);
+         if Polls >= Attempts then
+            raise Device_Misbehaved with
+              "the controller had not finished shutting down after"
+              & Natural'Image (Attempts) & " polls; its status register"
+              & " reports shutdown state"
+              & Natural'Image (Shutdown_Progress (BAR));
+         end if;
+      end loop;
+   end Shut_Down;
 
    -------------------------------
    -- Write_Log_Page_Command --

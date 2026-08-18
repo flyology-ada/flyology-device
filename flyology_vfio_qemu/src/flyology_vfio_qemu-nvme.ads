@@ -255,6 +255,24 @@ package Flyology_VFIO_QEMU.NVMe is
       Completion : Queue_Location;
       Attempts   : Positive := 20_000);
 
+   --  Asks the controller to shut down, and waits until it has.
+   --
+   --  Distinct from Disable, which stops the controller where it stands.
+   --  A shutdown notification tells it to finish what it has and commit
+   --  anything it was holding, and it reports progress in its own status
+   --  register rather than simply going not-ready. A driver that disables
+   --  without notifying may lose whatever a volatile write cache held.
+   --
+   --  @param BAR The controller's mapped registers
+   --  @param Attempts How many times to poll before giving up
+   --  @exception Device_Misbehaved The shutdown did not complete
+   procedure Shut_Down (BAR : Regions.Window; Attempts : Positive := 20_000);
+
+   --  How far a shutdown has got, as the status register reports it.
+   --  @param BAR The controller's mapped registers
+   --  @return Zero for none requested, one for in progress, two for done
+   function Shutdown_Progress (BAR : Regions.Window) return Natural;
+
    --  Whether the controller is ready for commands.
    --  @param BAR The controller's mapped registers
    --  @return True when the ready bit is set
@@ -358,6 +376,14 @@ package Flyology_VFIO_QEMU.NVMe is
    --  I/O opcode: check that blocks can be read, without transferring them.
    Opcode_Verify : constant IO_Opcode := 16#0C#;
 
+   --  Admin opcode: tell the controller where its doorbells may be
+   --  shadowed in host memory, so a driver can skip a register write when
+   --  the controller has not fallen behind.
+   Opcode_Doorbell_Buffer_Config : constant Admin_Opcode := 16#7C#;
+
+   --  Admin opcode: read a directive's parameters.
+   Opcode_Directive_Receive : constant Admin_Opcode := 16#1A#;
+
    --  Admin opcode: give up on a command already submitted.
    Opcode_Abort : constant Admin_Opcode := 16#08#;
 
@@ -399,6 +425,20 @@ package Flyology_VFIO_QEMU.NVMe is
 
    --  Feature: which asynchronous events the controller may report.
    Feature_Async_Event_Configuration : constant Feature_Identifier := 16#0B#;
+
+   --  Which of a feature's several values a Get should return.
+   --
+   --  A feature has a current value, a default the controller was built
+   --  with, a saved value that survives a reset, and a description of which
+   --  of those it supports at all. A driver that only ever reads the
+   --  current value cannot tell a controller that ignored a Set from one
+   --  that accepted it and reset.
+   --
+   --  @enum Current What the feature is set to now
+   --  @enum Default What it was before anything set it
+   --  @enum Saved What it will be after the next reset
+   --  @enum Capabilities Which of the above this feature supports
+   type Feature_Selection is (Current, Default, Saved, Capabilities);
 
    --  A feature identifier outside anything defined, for checking refusal.
    Feature_Undefined : constant Feature_Identifier := 16#7E#;
@@ -623,6 +663,8 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @param Feature Which feature
    --  @param Value The value to set, ignored when getting
    --  @param Namespace Which namespace, where the feature is per-namespace
+   --  @param Selection Which value to read, ignored when setting
+   --  @param Save Whether a set should survive the next reset
    procedure Write_Feature_Command
      (Submission : Queue_Location;
       Slot       : Natural;
@@ -630,7 +672,9 @@ package Flyology_VFIO_QEMU.NVMe is
       Opcode     : Admin_Opcode;
       Feature    : Feature_Identifier;
       Value      : U32 := 0;
-      Namespace  : Namespace_Identifier := No_Namespace)
+      Namespace  : Namespace_Identifier := No_Namespace;
+      Selection  : Feature_Selection := Current;
+      Save       : Boolean := False)
      with Pre => Submission.Kind = Admin;
 
    --  Writes a command reading one of the controller's logs.

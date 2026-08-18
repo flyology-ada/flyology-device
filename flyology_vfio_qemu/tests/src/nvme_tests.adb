@@ -1138,6 +1138,93 @@ begin
                         Next_ID := Next_ID + 1;
                      end;
 
+                     ------------------------------------------------------
+                     --  The rest of the admin surface
+                     ------------------------------------------------------
+
+                     --  A feature has four values, not one: what it is set
+                     --  to, what it defaults to, what survives a reset, and
+                     --  which of those it supports at all. A driver reading
+                     --  only the current value cannot tell a controller
+                     --  that ignored a Set from one that accepted it.
+                     declare
+                        Answered : Natural := 0;
+                     begin
+                        for Which in Controller.Feature_Selection loop
+                           Controller.Write_Feature_Command
+                             (Submission, Admin_Slot, Next_ID,
+                              Controller.Opcode_Get_Features,
+                              Controller.Feature_Volatile_Write_Cache,
+                              Selection => Which);
+                           if Run_Admin.Status = 0 then
+                              Answered := Answered + 1;
+                              Harness.Note
+                                ("  write cache, "
+                                 & Controller.Feature_Selection'Image (Which)
+                                 & ": 0x"
+                                 & Hex_32 (Controller.Completion_Result
+                                             (Completion, Last_Admin)));
+                           end if;
+                           Next_ID := Next_ID + 1;
+                        end loop;
+                        Harness.Check
+                          (Answered >= 2,
+                           "the controller answers at least two of the four"
+                           & " values a feature has, rather than only the"
+                           & " current one");
+                     end;
+
+                     --  How each namespace is named, which is how a driver
+                     --  recognises the same namespace across controllers.
+                     Controller.Write_Admin_Command
+                       (Submission, Admin_Slot, Controller.Opcode_Identify,
+                        Next_ID, Namespace => 1, DPTR1 => Log_Device,
+                        CDW10 => Controller.Identify_Namespace_Descriptors);
+                     if Run_Admin.Status = 0 then
+                        Harness.Check
+                          (Log_Bytes (0) /= 0,
+                           "the namespace carries at least one identifying"
+                           & " descriptor, whose first byte names its kind");
+                     else
+                        Harness.Skip
+                          ("namespace descriptors",
+                           "this controller does not report them");
+                     end if;
+                     Next_ID := Next_ID + 1;
+
+                     --  Two more the coverage probe reports as implemented
+                     --  and nothing had driven. Neither is asked to do
+                     --  anything useful here; what is checked is that they
+                     --  are answered rather than refused as unknown.
+                     Controller.Write_Admin_Command
+                       (Submission, Admin_Slot,
+                        Controller.Opcode_Directive_Receive, Next_ID,
+                        Namespace => 1, DPTR1 => Log_Device);
+                     declare
+                        Answer : constant Controller.Completion := Run_Admin;
+                     begin
+                        Harness.Check
+                          ((Answer.Status and 16#7FF#) /= 1,
+                           "Directive Receive is a command this controller"
+                           & " has, whatever it makes of these arguments");
+                     end;
+                     Next_ID := Next_ID + 1;
+
+                     Controller.Write_Admin_Command
+                       (Submission, Admin_Slot,
+                        Controller.Opcode_Doorbell_Buffer_Config, Next_ID,
+                        DPTR1 => Log_Device, DPTR2 => Namespace_Info_Device);
+                     declare
+                        Answer : constant Controller.Completion := Run_Admin;
+                     begin
+                        Harness.Check
+                          ((Answer.Status and 16#7FF#) /= 1,
+                           "and so is Doorbell Buffer Config, which lets a"
+                           & " driver skip a register write when the"
+                           & " controller has not fallen behind");
+                     end;
+                     Next_ID := Next_ID + 1;
+
                      --  Abandoning a command. Nothing here is slow enough
                      --  to still be running when the abort arrives, so the
                      --  controller reports that it found nothing to
@@ -1180,10 +1267,25 @@ begin
                         "removing the I/O completion queue succeeded");
                   end;
 
+                  --  Shutting down properly rather than merely stopping.
+                  --  A notification tells the controller to commit what it
+                  --  is holding; disabling it does not, and a driver that
+                  --  only ever disables can lose whatever a volatile write
+                  --  cache had.
+                  Harness.Check_Equal
+                    (U32 (Controller.Shutdown_Progress (BAR)), 0,
+                     "no shutdown is in progress before one is asked for");
+
+                  Controller.Shut_Down (BAR);
+                  Harness.Check_Equal
+                    (U32 (Controller.Shutdown_Progress (BAR)), 2,
+                     "the controller reports the shutdown complete, which"
+                     & " is a different state from simply not being ready");
+
                   Controller.Disable (BAR);
                   Harness.Check
                     (not Controller.Is_Ready (BAR),
-                     "the controller stops again when disabled");
+                     "and it stops when disabled afterwards");
                end;
 
                Config.Disable_Bus_Mastering (Device);

@@ -41,7 +41,11 @@ a device that only answers register reads exercises far less than one doing
 real work. Everything below is memory the device reaches by DMA through
 addresses this code programmed into the IOMMU.
 
-**The NVMe controller is brought up and used as a disk.** It is disabled,
+**The NVMe controller is brought up and used as a disk**, on the
+arrangement a driver would actually use: four queue pairs, each bound to
+its own MSI-X vector, with completions collected by waiting rather than
+spinning. Work is submitted to every queue before any is collected, which
+is the part a one-queue-at-a-time test never reaches. It is disabled,
 its admin queues are pointed at mapped memory, and it is enabled — at which
 point it reads its submission queue, writes its completion queue and writes
 four kibibytes of Identify data, all by DMA. Then it is asked to describe
@@ -54,7 +58,15 @@ back:
 - a read past the end of the namespace, which must be refused with a status
   rather than quietly accepted;
 - the queue pair removed again, submission queue first, because a
-  completion queue still serving one cannot be deleted.
+  completion queue still serving one cannot be deleted;
+- a shutdown notification, which is a different thing from disabling the
+  controller: it tells it to commit what it is holding, and reports its
+  progress in a status field of its own.
+
+Its feature surface is read four ways rather than one — current, default,
+saved, and which of those the feature supports — because a driver reading
+only the current value cannot tell a controller that ignored a Set from one
+that accepted it and reset.
 
 **The Intel controller is brought up and used as a network interface.**
 Receive and transmit descriptor rings are built in mapped memory, the rings
@@ -100,7 +112,7 @@ What they currently report:
 
 | Surface | Implemented | Exercised |
 | --- | --- | --- |
-| NVMe admin commands | 13 of 25 probed (7 more deliberately not probed) | 9 |
+| NVMe admin commands | 13 of 25 probed (7 more deliberately not probed) | 11 |
 | NVMe namespace commands | 15 of 15 probed | 8 |
 | NVMe features | 12 of 32 answer without a namespace | 3 driven, 2 round-tripped |
 | NVMe logs | 5 of 16 | 3 |
