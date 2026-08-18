@@ -168,6 +168,19 @@ give_nvme_to () {
     printf 'nvme is now with %s\n' \$(basename \$(readlink \$d/driver))"
 }
 
+#  A filesystem made fresh every run, rather than one kept between them.
+#
+#  A test that reuses a filesystem accumulates the leavings of every run
+#  before it: a file rewritten in a new place leaves the old copy in a block
+#  nothing has reclaimed, and a search that takes the first match finds the
+#  wrong one. Making it again costs a moment and removes the whole class.
+#
+#  The payload also ends in a token this run and no earlier one used, which
+#  covers what remaking the filesystem does not: mkfs rewrites the
+#  bookkeeping and leaves the data blocks as they were.
+fs_token=$(date +%H%M%S)
+fs_corpus="$corpus FLYOLOGY_DEVICE_FS_TOKEN=$fs_token"
+
 printf '\n== nvme_file_tests ==\n'
 give_nvme_to nvme
 #  Found by its namespace identifier rather than by its name, because they
@@ -184,19 +197,19 @@ find_namespace='n=""
 run_in_guest "$find_namespace
   [ -b \"\$n\" ] || { echo 'no block device for namespace 4'; exit 1; }
   mkdir -p /mnt/nvme
-  blkid \"\$n\" >/dev/null 2>&1 || mkfs.vfat -n FLYOLOGY \"\$n\" >/dev/null
+  mkfs.ext2 -q -F -L FLYOLOGY \"\$n\" >/dev/null
   mount \"\$n\" /mnt/nvme
   printf 'namespace 4 is %s, mounted at /mnt/nvme\n' \"\$n\"" || status=1
-run_in_guest "$corpus /mnt/share/nvme_file_tests write" || status=1
+run_in_guest "$fs_corpus /mnt/share/nvme_file_tests write" || status=1
 run_in_guest 'sync; umount /mnt/nvme; echo unmounted' || status=1
 
 give_nvme_to vfio-pci
-run_in_guest "$corpus /mnt/share/nvme_file_tests find" || status=1
+run_in_guest "$fs_corpus /mnt/share/nvme_file_tests find" || status=1
 
 give_nvme_to nvme
 run_in_guest "$find_namespace
   mount \"\$n\" /mnt/nvme && echo remounted" || status=1
-run_in_guest "$corpus /mnt/share/nvme_file_tests read" || status=1
+run_in_guest "$fs_corpus /mnt/share/nvme_file_tests read" || status=1
 run_in_guest 'umount /mnt/nvme 2>/dev/null; echo done' || status=1
 
 #  Left as the other suites expect to find it.

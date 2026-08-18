@@ -9,6 +9,12 @@
 --  which is not a simplification but the only correct way to share a disk
 --  between two drivers.
 --
+--  Which filesystem it is does not matter and is deliberately not relied
+--  on: the driver finds the payload by reading the medium and looking for
+--  it, not by parsing anything. So the one the base guest image can already
+--  make is the one used, because a harness that needs a package installed
+--  first works on the machine it was written on and nowhere else.
+--
 --  Writing. The kernel has the namespace, a filesystem is mounted on it,
 --  and a file is written through Flyology's file interface with a payload
 --  chosen to appear nowhere else. Then it is unmounted, which is what makes
@@ -31,6 +37,7 @@
 --  see.
 
 with Ada.Command_Line;
+with Ada.Environment_Variables;
 with Ada.Exceptions;
 with Ada.Streams;
 with Flyology.IO.Files;
@@ -80,10 +87,42 @@ procedure NVMe_File_Tests is
    --  Long enough not to occur by chance on a freshly made filesystem, and
    --  the same length as what replaces it so that finding one and writing
    --  the other needs no bookkeeping.
-   Written_By_Filesystem : constant String :=
-     "flyology-device: written through a file, sought through a driver.";
-   Written_By_Driver : constant String :=
-     "flyology-device: written by a driver, read back through a file.  ";
+   --
+   --  Both end in a token the harness varies per run, and that is not
+   --  decoration. The file is rewritten each time, and if the filesystem
+   --  ever puts it somewhere new the old copy stays behind in a block
+   --  nothing has reused. A search that took the first match would find
+   --  that one — at a lower block, so first — rewrite it, and leave the
+   --  live file untouched: a failure in the third turn that looks like the
+   --  driver and the filesystem disagreeing when nothing of the sort has
+   --  happened. A token no earlier run used cannot be found by mistake.
+   Filesystem_Prefix : constant String :=
+     "flyology-device: written through a file, sought by a driver, run ";
+   Driver_Prefix : constant String :=
+     "flyology-device: written by a driver, read back as a file, run   ";
+
+   pragma Compile_Time_Error
+     (Filesystem_Prefix'Length /= Driver_Prefix'Length,
+      "the two payloads must be the same length");
+
+   --  Six characters, whatever the harness supplied. A token of another
+   --  length would make the two payloads differ in length again, which the
+   --  check above cannot catch because this part is not known until it
+   --  runs.
+   function Token return String is
+      Given : constant String :=
+        (if Ada.Environment_Variables.Exists ("FLYOLOGY_DEVICE_FS_TOKEN")
+         then Ada.Environment_Variables.Value ("FLYOLOGY_DEVICE_FS_TOKEN")
+         else "");
+      Room  : String (1 .. 6) := [others => '0'];
+      Taken : constant Natural := Natural'Min (Given'Length, 6);
+   begin
+      Room (1 .. Taken) := Given (Given'First .. Given'First + Taken - 1);
+      return Room;
+   end Token;
+
+   Written_By_Filesystem : constant String := Filesystem_Prefix & Token;
+   Written_By_Driver     : constant String := Driver_Prefix & Token;
 
    Scratch_Bytes : constant := 128 * 1024;
 
@@ -91,12 +130,6 @@ procedure NVMe_File_Tests is
      (if Ada.Command_Line.Argument_Count >= 1
       then Ada.Command_Line.Argument (1) else "");
 
-   --  The two payloads have to be the same length for the rewrite to be a
-   --  rewrite rather than a shortening, and a mistake here would show up as
-   --  a corrupted filesystem rather than as a failed check.
-   pragma Compile_Time_Error
-     (Written_By_Filesystem'Length /= Written_By_Driver'Length,
-      "the two payloads must be the same length");
 
    procedure Write_Through_File;
    procedure Read_Through_File;

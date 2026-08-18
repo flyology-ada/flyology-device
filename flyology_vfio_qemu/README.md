@@ -160,6 +160,11 @@ then reads back as what the driver wrote. The namespace is handed between
 the kernel and vfio-pci between turns rather than shared, because a disk
 has one owner at a time.
 
+The filesystem is made fresh each run and is the one the base guest image
+can already make. A harness that needs a package installed first works on
+the machine it was written on and nowhere else, and a filesystem kept
+between runs accumulates the leavings of all of them.
+
 **A block device's name is not its namespace identifier.** Namespace three
 starts detached, so it takes an identifier and no name, and namespace four
 arrives as `nvme0n3` — until it does not. The harness selects by reading
