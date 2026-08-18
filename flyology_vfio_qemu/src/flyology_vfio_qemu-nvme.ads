@@ -399,6 +399,21 @@ package Flyology_VFIO_QEMU.NVMe is
    --  I/O opcode: check that blocks can be read, without transferring them.
    Opcode_Verify : constant IO_Opcode := 16#0C#;
 
+   --  I/O opcode: copy blocks within a namespace without routing the data
+   --  through host memory.
+   --
+   --  The most demanding thing in the command set for the layers below it:
+   --  the controller reads a descriptor list from one device address, reads
+   --  the source blocks it names, and writes the destination blocks, all
+   --  without the host seeing the data. Three separately programmed
+   --  addresses have to be right and none of them can be checked by looking
+   --  at what came back, because nothing comes back.
+   --
+   --  Shares its number with Directive Send, which is an admin command.
+   --  The two never meet: an opcode means nothing without knowing which
+   --  queue it was submitted to.
+   Opcode_Copy : constant IO_Opcode := 16#19#;
+
    --  Admin opcode: tell the controller where its doorbells may be
    --  shadowed in host memory, so a driver can skip a register write when
    --  the controller has not fallen behind.
@@ -406,6 +421,15 @@ package Flyology_VFIO_QEMU.NVMe is
 
    --  Admin opcode: read a directive's parameters.
    Opcode_Directive_Receive : constant Admin_Opcode := 16#1A#;
+
+   --  Admin opcode: change a directive's parameters.
+   --
+   --  A directive is a side channel for telling the controller something
+   --  about data it has not been given yet — which stream a write belongs
+   --  to, so that data with a common lifetime is kept together and erased
+   --  together. Receive reports which directives exist and which are
+   --  switched on; Send switches one on.
+   Opcode_Directive_Send : constant Admin_Opcode := 16#19#;
 
    --  Admin opcode: give up on a command already submitted.
    Opcode_Abort : constant Admin_Opcode := 16#08#;
@@ -579,6 +603,164 @@ package Flyology_VFIO_QEMU.NVMe is
 
    --  An opcode no command set defines, for checking that a controller
    --  refuses what it does not implement rather than ignoring it.
+   --  Which directive a Send or Receive concerns.
+   type Directive_Kind is new U8;
+
+   --  The directive every controller has, describing the others.
+   Directive_Identify : constant Directive_Kind := 16#00#;
+
+   --  The streams directive: writes carry a stream identifier and the
+   --  controller keeps a stream's data together.
+   Directive_Streams : constant Directive_Kind := 16#01#;
+
+   --  Which operation of a directive to perform. The numbers are per
+   --  directive and per direction, so the same value means different
+   --  things in a Send and a Receive.
+   type Directive_Operation is new U8;
+
+   --  Receive, identify directive: report what is supported and enabled.
+   Directive_Return_Parameters : constant Directive_Operation := 16#01#;
+
+   --  Send, identify directive: switch a directive on or off.
+   Directive_Enable : constant Directive_Operation := 16#01#;
+
+   --  Reads a directive's parameters into a buffer.
+   --
+   --  @param Submission Where the admin submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Namespace Which namespace, or none for the controller
+   --  @param Result_Address Where to put the answer, as a device address
+   --  @param Bytes How many bytes the buffer holds
+   --  @param Directive Which directive to ask about
+   --  @param Operation Which operation of it to perform
+   --  @param Specific The directive-specific word, meaning nothing to most
+   procedure Write_Directive_Receive_Command
+     (Submission     : Queue_Location;
+      Slot           : Natural;
+      Identifier     : U16;
+      Namespace      : Namespace_Identifier;
+      Result_Address : U64;
+      Bytes          : Positive;
+      Directive      : Directive_Kind := Directive_Identify;
+      Operation      : Directive_Operation := Directive_Return_Parameters;
+      Specific       : U16 := 0)
+     with Pre => Submission.Kind = Admin and then Bytes mod 4 = 0;
+
+   --  Changes a directive's parameters.
+   --
+   --  Whether a buffer is needed depends on the directive: enabling one
+   --  through the identify directive carries none, and Buffer_Address is
+   --  then zero.
+   --
+   --  @param Submission Where the admin submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Namespace Which namespace, or none for the controller
+   --  @param Buffer_Address Where the parameters live, or zero for none
+   --  @param Bytes How many bytes the buffer holds, or zero for none
+   --  @param Directive Which directive to change
+   --  @param Operation Which operation of it to perform
+   --  @param Specific The directive-specific word: for enabling through the
+   --    identify directive, the directive to switch in the low byte and
+   --    whether to switch it on in the next
+   procedure Write_Directive_Send_Command
+     (Submission     : Queue_Location;
+      Slot           : Natural;
+      Identifier     : U16;
+      Namespace      : Namespace_Identifier;
+      Buffer_Address : U64 := 0;
+      Bytes          : Natural := 0;
+      Directive      : Directive_Kind := Directive_Identify;
+      Operation      : Directive_Operation := Directive_Enable;
+      Specific       : U16 := 0)
+     with Pre => Submission.Kind = Admin and then Bytes mod 4 = 0;
+
+   --  Which directives a controller says it supports.
+   --
+   --  The first two bytes of an identify-directive Receive: a bitmap
+   --  indexed by directive, then the same bitmap for those enabled.
+   --
+   --  @param Data Address of the returned parameters
+   --  @param Directive Which directive to ask about
+   --  @return True when the controller supports it
+   function Directive_Supported
+     (Data : System.Address; Directive : Directive_Kind) return Boolean;
+
+   --  Whether a directive is currently switched on.
+   --  @param Data Address of the returned parameters
+   --  @param Directive Which directive to ask about
+   --  @return True when it is enabled
+   function Directive_Enabled
+     (Data : System.Address; Directive : Directive_Kind) return Boolean;
+
+   --  How a copy command's source ranges are laid out.
+   --
+   --  @enum Format_32_Byte The original layout
+   --  @enum Format_40_Byte The same with a wider reference tag
+   type Copy_Format is (Format_32_Byte, Format_40_Byte);
+
+   --  How many bytes one source range descriptor occupies.
+   --  @param Format Which layout
+   --  @return The descriptor size
+   function Copy_Range_Bytes (Format : Copy_Format) return Positive
+     is (case Format is
+            when Format_32_Byte => 32,
+            when Format_40_Byte => 40);
+
+   --  Which copy formats a controller says it supports.
+   --
+   --  Read from the Identify Controller structure, where a bit per format
+   --  says whether a copy naming ranges in that layout will be accepted.
+   --
+   --  @param Data Address of the Identify Controller data
+   --  @param Format Which layout
+   --  @return True when the controller accepts that layout
+   function Copy_Format_Supported
+     (Data : System.Address; Format : Copy_Format) return Boolean;
+
+   --  The largest number of source ranges one copy may name.
+   --  @param Data Address of the Identify Namespace data
+   --  @return The limit, or zero when the namespace states none
+   function Maximum_Copy_Sources (Data : System.Address) return Natural;
+
+   --  Fills in one entry of a copy command's source range list.
+   --
+   --  @param List Where the list lives
+   --  @param Index Which entry, from zero
+   --  @param First_Block The first block to copy from
+   --  @param Blocks How many blocks to copy
+   --  @param Format Which layout the list uses
+   procedure Write_Copy_Source_Range
+     (List        : System.Address;
+      Index       : Natural;
+      First_Block : U64;
+      Blocks      : Positive;
+      Format      : Copy_Format := Format_32_Byte)
+     with Pre => Blocks <= 65_536;
+
+   --  Copies blocks within a namespace.
+   --
+   --  @param Submission Where the namespace submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Namespace Which namespace
+   --  @param List_Address Where the source range list lives, as a device
+   --    address
+   --  @param Sources How many ranges the list holds
+   --  @param First_Block Where in the namespace to write the copy
+   --  @param Format Which layout the list uses
+   procedure Write_Copy_Command
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Namespace    : Namespace_Identifier;
+      List_Address : U64;
+      Sources      : Positive;
+      First_Block  : U64;
+      Format       : Copy_Format := Format_32_Byte)
+     with Pre => Submission.Kind = Namespace_IO and then Sources <= 256;
+
    Opcode_Undefined : constant Admin_Opcode := 16#FE#;
 
    --  Feature: how many I/O queues the controller will allow.

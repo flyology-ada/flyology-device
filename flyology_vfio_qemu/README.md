@@ -119,8 +119,8 @@ What they currently report:
 
 | Surface | Implemented | Exercised |
 | --- | --- | --- |
-| NVMe admin commands | 13 of 25 probed (7 more deliberately not probed) | 12 |
-| NVMe namespace commands | 15 of 15 probed | 11 |
+| NVMe admin commands | 13 of 25 probed (7 more deliberately not probed) | 13 |
+| NVMe namespace commands | 15 of 15 probed | 12 |
 | NVMe features | 12 of 32 answer without a namespace | 3 driven, 2 round-tripped |
 | NVMe logs | 5 of 16 | 3 |
 | e1000e registers | 42 of 42 probed answer | 34 |
@@ -151,6 +151,12 @@ and `0x19`.
 controller-scope feature named with a namespace identifier is refused, and a
 per-namespace feature without one likewise. Both refusals are correct and
 both are easy to read as the controller being wrong.
+
+**Only the identify directive exists.** A controller must have the
+directive that describes the other directives, and QEMU's has nothing else
+to describe: streams are not implemented, so there is no directive that can
+be switched on and the Send that would switch one on has nothing to do. The
+command is exercised only as far as the device allows.
 
 **Reservations cannot be reached at all.** The three reservation commands
 appear in QEMU's command-set table and its NVMe device offers no option

@@ -285,10 +285,28 @@ begin
                      --  Drain the admin vector: creating the pairs posted
                      --  completions there, and leaving them pending would
                      --  make the checks below read a stale signal.
-                     Harness.Check
-                       (IRQ.Take (Admin_Signal) > 0,
-                        "the admin queue signalled its own vector while the"
-                        & " pairs were being built");
+                     --
+                     --  Draining means waiting until it goes quiet rather
+                     --  than taking once. A completion and its interrupt
+                     --  are two separate things: the controller writes the
+                     --  queue entry and then sends the message, and the
+                     --  loop above finished as soon as it saw the entry.
+                     --  One Take therefore collects the interrupts that had
+                     --  arrived by then and leaves the last one in flight,
+                     --  which is exactly the stale signal this is here to
+                     --  prevent — and which made the final check below fail
+                     --  about one run in two before it waited.
+                     declare
+                        Drained : U64 := 0;
+                     begin
+                        while Waiting.Wait_For (Admin_Signal, 0.05) loop
+                           Drained := Drained + IRQ.Take (Admin_Signal);
+                        end loop;
+                        Harness.Check
+                          (Drained > 0,
+                           "the admin queue signalled its own vector while"
+                           & " the pairs were being built");
+                     end;
                      Harness.Check
                        (Waiting.Wait_For_Any (IO_Signals, 0.05) = 0,
                         "and no I/O vector had been signalled yet");

@@ -16,6 +16,7 @@ executables = [
   "msix_tests",
   "nvme_queues_tests",
   "nvme_zoned_tests",
+  "nvme_copy_tests",
 ]
 
 [[depends-on]]

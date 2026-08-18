@@ -1007,4 +1007,181 @@ package body Flyology_VFIO_QEMU.NVMe is
       return 2 ** Power;
    end Namespace_Block_Bytes;
 
+   -----------------------------------------
+   -- Write_Directive_Receive_Command --
+   -----------------------------------------
+
+   procedure Write_Directive_Receive_Command
+     (Submission     : Queue_Location;
+      Slot           : Natural;
+      Identifier     : U16;
+      Namespace      : Namespace_Identifier;
+      Result_Address : U64;
+      Bytes          : Positive;
+      Directive      : Directive_Kind := Directive_Identify;
+      Operation      : Directive_Operation := Directive_Return_Parameters;
+      Specific       : U16 := 0)
+   is
+      Words : constant U32 := U32 (Bytes / 4) - 1;
+   begin
+      --  The tenth word is a length in words, one less than the real
+      --  number. The eleventh packs three unrelated things: which operation
+      --  in its lowest byte, which directive in the next, and a
+      --  directive-specific value in the high half that most directives
+      --  ignore.
+      Write_Admin_Command
+        (Submission, Slot, Opcode_Directive_Receive, Identifier,
+         Namespace => Namespace,
+         DPTR1 => Result_Address,
+         CDW10 => Words,
+         CDW11 => U32 (Operation)
+                  or Interfaces.Shift_Left (U32 (Directive), 8)
+                  or Interfaces.Shift_Left (U32 (Specific), 16));
+   end Write_Directive_Receive_Command;
+
+   --------------------------------------
+   -- Write_Directive_Send_Command --
+   --------------------------------------
+
+   procedure Write_Directive_Send_Command
+     (Submission     : Queue_Location;
+      Slot           : Natural;
+      Identifier     : U16;
+      Namespace      : Namespace_Identifier;
+      Buffer_Address : U64 := 0;
+      Bytes          : Natural := 0;
+      Directive      : Directive_Kind := Directive_Identify;
+      Operation      : Directive_Operation := Directive_Enable;
+      Specific       : U16 := 0)
+   is
+      Words : constant U32 :=
+        (if Bytes = 0 then 0 else U32 (Bytes / 4) - 1);
+   begin
+      Write_Admin_Command
+        (Submission, Slot, Opcode_Directive_Send, Identifier,
+         Namespace => Namespace,
+         DPTR1 => Buffer_Address,
+         CDW10 => Words,
+         CDW11 => U32 (Operation)
+                  or Interfaces.Shift_Left (U32 (Directive), 8)
+                  or Interfaces.Shift_Left (U32 (Specific), 16));
+   end Write_Directive_Send_Command;
+
+   -------------------------------
+   -- Directive_Bitmap_Bit --
+   -------------------------------
+
+   --  Whether the bit for a directive is set in a bitmap starting here.
+   function Directive_Bitmap_Bit
+     (Data : System.Address; At_Offset : Natural; Directive : Directive_Kind)
+      return Boolean
+   is
+      Byte_At : constant Natural :=
+        At_Offset + Natural (Directive) / 8;
+      Within  : constant Natural := Natural (Directive) mod 8;
+      Cell    : Byte_Array (0 .. 0) with Import,
+        Address => Data + SSE.Storage_Offset (Byte_At);
+   begin
+      return (Interfaces.Shift_Right (Cell (0), Within) and 1) = 1;
+   end Directive_Bitmap_Bit;
+
+   ------------------------------
+   -- Directive_Supported --
+   ------------------------------
+
+   function Directive_Supported
+     (Data : System.Address; Directive : Directive_Kind) return Boolean
+   is (Directive_Bitmap_Bit (Data, 0, Directive));
+
+   ----------------------------
+   -- Directive_Enabled --
+   ----------------------------
+
+   --  The enabled bitmap follows the supported one, both a fixed thirty-two
+   --  bytes wide however few directives are defined.
+   function Directive_Enabled
+     (Data : System.Address; Directive : Directive_Kind) return Boolean
+   is (Directive_Bitmap_Bit (Data, 32, Directive));
+
+   ---------------------------------
+   -- Copy_Format_Supported --
+   ---------------------------------
+
+   function Copy_Format_Supported
+     (Data : System.Address; Format : Copy_Format) return Boolean
+   is
+      --  OCFS, at byte 534 of the Identify Controller structure: a bitmap
+      --  indexed by format number rather than a count.
+      Field : constant U16 := Get_16 (Data, 534);
+      Bit   : constant Natural := Copy_Format'Pos (Format);
+   begin
+      return (Interfaces.Shift_Right (Field, Bit) and 1) = 1;
+   end Copy_Format_Supported;
+
+   --------------------------------
+   -- Maximum_Copy_Sources --
+   --------------------------------
+
+   function Maximum_Copy_Sources (Data : System.Address) return Natural is
+      --  MSRC, at byte 80 of the Identify Namespace structure, and 0's
+      --  based like everything else that counts here. A namespace with no
+      --  limit reports zero, which is indistinguishable from a limit of
+      --  one; the specification chose that and callers live with it.
+      Cell : Byte_Array (0 .. 0) with Import,
+        Address => Data + SSE.Storage_Offset (80);
+   begin
+      return Natural (Cell (0)) + 1;
+   end Maximum_Copy_Sources;
+
+   ----------------------------------
+   -- Write_Copy_Source_Range --
+   ----------------------------------
+
+   procedure Write_Copy_Source_Range
+     (List        : System.Address;
+      Index       : Natural;
+      First_Block : U64;
+      Blocks      : Positive;
+      Format      : Copy_Format := Format_32_Byte)
+   is
+      Stride    : constant Positive := Copy_Range_Bytes (Format);
+      At_Offset : constant Natural := Index * Stride;
+      Blank : Byte_Array (0 .. Stride - 1) with Import,
+        Address => List + SSE.Storage_Offset (At_Offset);
+   begin
+      Blank := (others => 0);
+      Put_64 (List, At_Offset + 8, First_Block);
+      Put_16 (List, At_Offset + 16, U16 (Blocks - 1));
+   end Write_Copy_Source_Range;
+
+   ----------------------------
+   -- Write_Copy_Command --
+   ----------------------------
+
+   procedure Write_Copy_Command
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Namespace    : Namespace_Identifier;
+      List_Address : U64;
+      Sources      : Positive;
+      First_Block  : U64;
+      Format       : Copy_Format := Format_32_Byte)
+   is
+   begin
+      --  The destination is where an ordinary write would put its address,
+      --  in the tenth and eleventh words. The twelfth holds the number of
+      --  ranges one less than the real number in its lowest byte, and which
+      --  layout they use in the next nibble up.
+      Write_IO_Command
+        (Submission, Slot, Opcode_Copy, Identifier,
+         Namespace => Namespace,
+         DPTR1 => List_Address,
+         CDW10 => U32 (First_Block and 16#FFFF_FFFF#),
+         CDW11 => U32 (Interfaces.Shift_Right (First_Block, 32)),
+         CDW12 => U32 (Sources - 1)
+                  or Interfaces.Shift_Left
+                       (U32 (Copy_Format'Pos (Format)), 8));
+   end Write_Copy_Command;
+
 end Flyology_VFIO_QEMU.NVMe;
