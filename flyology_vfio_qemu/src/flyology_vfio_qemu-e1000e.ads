@@ -373,15 +373,221 @@ package Flyology_VFIO_QEMU.E1000E is
       Word     : Natural;
       Attempts : Positive := 20_000) return U16;
 
+   ---------------------------------------------------------------------
+   --  More than one queue
+   ---------------------------------------------------------------------
+
+   --  A controller with one queue serialises every core in the machine
+   --  behind one ring, one tail register, and one interrupt. Several queues
+   --  is how that stops being true, and receive-side scaling is how the
+   --  device decides which queue a frame belongs on without the host having
+   --  looked at it: it hashes the addresses and ports and consults a table.
+   --
+   --  The point of hashing rather than round-robin is that one connection's
+   --  frames all land on one queue, so they stay in order and stay on one
+   --  core's cache. A device that spread them evenly would be fair and
+   --  useless.
+
+   --  Which queue. This controller has two of each kind; the larger members
+   --  of the family have more, and the register layout is the same one
+   --  repeated, which is why the bases below are a table rather than a
+   --  formula.
+   type Queue_Index is new Natural range 0 .. 1;
+
+   --  Which receive descriptor layout a ring holds.
+   --
+   --  The two are the same size and share their first eight bytes going in,
+   --  so a device writing one into a ring the driver reads as the other
+   --  produces plausible nonsense rather than an obvious fault: a length
+   --  that is really half a checksum, a status byte that is really part of
+   --  a hash.
+   --
+   --  @enum Legacy The original layout, which has nowhere to report a hash
+   --  @enum Extended The layout that does, and which scaling requires
+   type Descriptor_Format is (Legacy, Extended);
+
+   --  Where each receive ring's registers start.
+   --
+   --  A hundred and twenty-eight bytes apart, which is this controller's
+   --  layout and not the family's: the later members put the queues past
+   --  the first four at C000h in blocks of sixty-four, and reading that
+   --  layout back onto this one gives registers that accept a write and
+   --  forget it.
+   Receive_Ring_Base : constant array (Queue_Index) of Natural :=
+     [16#02800#, 16#02900#];
+
+   --  Where each transmit ring's registers start.
+   Transmit_Ring_Base : constant array (Queue_Index) of Natural :=
+     [16#03800#, 16#03900#];
+
+   --  How far each ring register sits from its ring's base. The same five
+   --  in the same order for every ring of either kind.
+   Ring_Base_High : constant := 16#04#;
+   Ring_Length    : constant := 16#08#;
+   Ring_Head      : constant := 16#10#;
+   Ring_Tail      : constant := 16#18#;
+
+   --  Whether to use more than one receive queue, and on what.
+   Multiple_Queue_Register : constant := 16#05818#;
+
+   --  Which receive descriptor layout the device writes, among other
+   --  things it does to arriving frames.
+   Receive_Filter_Control_Register : constant := 16#05008#;
+
+   --  Set in that register to write the longer descriptor layout.
+   Extended_Descriptors : constant U32 := 2 ** 15;
+
+   --  Set in the receive checksum register to stop the device putting a
+   --  checksum in the descriptor.
+   --
+   --  Which sounds like giving something up for nothing, and is the
+   --  opposite. The hash a scaled receive puts in the descriptor occupies
+   --  the same four bytes the checksum would, so a device can report one or
+   --  the other and not both. Leaving this clear is therefore a way of
+   --  switching receive-side scaling off without appearing to.
+   Checksum_In_Descriptor_Off : constant U32 := 2 ** 13;
+
+
+
+   --  Which queue each of a hundred and twenty-eight hash values goes to.
+   --
+   --  A byte per entry, of which this controller reads one bit. Filling it
+   --  with a single value sends everything to one queue, which is how a
+   --  test can steer deterministically without computing the hash itself.
+   Redirection_Table_Register : constant := 16#05C00#;
+
+   --  How many bytes the redirection table holds.
+   Redirection_Table_Bytes : constant := 128;
+
+   --  The secret the hash is salted with. Two controllers with different
+   --  keys send the same connection to different queues, which is the
+   --  point: it makes the mapping unpredictable from outside.
+   Hash_Key_Register : constant := 16#05C80#;
+
+   --  How many bytes the hash key holds.
+   Hash_Key_Bytes : constant := 40;
+
+   --  Set in the multiple-queue register to hash arriving frames rather
+   --  than sending them all to the first queue.
+   --
+   --  The field is two bits wide and this is the lower of them, so setting
+   --  the value two rather than the value one names a different mode
+   --  entirely and reads back looking as though it worked.
+   Multiple_Queue_Enable : constant U32 := 2 ** 0;
+
+   --  Set to include plain IPv4 frames in the hashing. Without a field bit
+   --  matching the frame, the device has nothing to hash and sends it to
+   --  the first queue — so a redirection table that appears not to work is
+   --  usually this.
+   Hash_Field_IPv4 : constant U32 := 2 ** 17;
+
+   --  Set to include IPv4 TCP frames.
+   Hash_Field_IPv4_TCP : constant U32 := 2 ** 16;
+
+   --  Fills the whole redirection table with one queue.
+   --  @param BAR The device's mapped registers
+   --  @param Queue Where everything should go
+   procedure Steer_Everything_To
+     (BAR : Regions.Window; Queue : Queue_Index);
+
+   --  Writes a hash key the device will salt with.
+   --  @param BAR The device's mapped registers
+   --  @param Seed A value the key is derived from, so a test can be
+   --    repeatable without carrying forty bytes around
+   procedure Set_Hash_Key (BAR : Regions.Window; Seed : U32);
+
+   ---------------------------------------------------------------------
+   --  Holding the sender back, and waiting before interrupting
+   ---------------------------------------------------------------------
+
+   --  How long to wait after a frame arrives before interrupting, in units
+   --  of 1.024 microseconds. Zero interrupts immediately, which is correct
+   --  and expensive.
+   Receive_Delay_Register : constant := 16#02820#;
+
+   --  How long to wait at most, however many more frames arrive. Without
+   --  it a steady stream keeps resetting the delay above and the interrupt
+   --  never comes.
+   Receive_Absolute_Delay_Register : constant := 16#0282C#;
+
+   --  The same pair for transmission.
+   Transmit_Delay_Register : constant := 16#03820#;
+   Transmit_Absolute_Delay_Register : constant := 16#0382C#;
+
+   --  The shortest gap between interrupts, whatever else happens.
+   Interrupt_Throttle_Register : constant := 16#000C4#;
+
+   --  Where a pause frame is addressed, and what marks it as one. The
+   --  address is fixed by the standard and a device with anything else here
+   --  will not recognise a pause it is sent.
+   Flow_Control_Address_Low  : constant := 16#00028#;
+   Flow_Control_Address_High : constant := 16#0002C#;
+   Flow_Control_Type         : constant := 16#00030#;
+
+   --  How long a pause frame asks for, in units of 512 bit times.
+   Flow_Control_Timer_Register : constant := 16#00170#;
+
+   --  How full the receive buffer must get before a pause is sent, and how
+   --  empty before the sender is released.
+   Flow_Control_High_Water : constant := 16#02160#;
+   Flow_Control_Low_Water  : constant := 16#02168#;
+
+   ---------------------------------------------------------------------
+   --  Agreeing a link speed
+   ---------------------------------------------------------------------
+
+   --  What this end can do, offered to the other end.
+   PHY_Advertisement : constant PHY_Register := 4;
+
+   --  What the other end said it can do. Meaningless until negotiation has
+   --  finished, which is what the status register's completion bit is for.
+   PHY_Partner_Ability : constant PHY_Register := 5;
+
+   --  What was worked out from the two.
+   PHY_Negotiation_Expansion : constant PHY_Register := 6;
+
+   --  Set in the PHY control register to negotiate rather than assume.
+   PHY_Negotiation_Enabled : constant U16 := 2 ** 12;
+
+   --  Set to start negotiating again from the beginning.
+   PHY_Restart_Negotiation : constant U16 := 2 ** 9;
+
+   --  Set in the PHY status register when this end can negotiate at all.
+   PHY_Can_Negotiate : constant U16 := 2 ** 3;
+
+   --  Set when negotiation has finished and the partner register means
+   --  something.
+   PHY_Negotiation_Complete : constant U16 := 2 ** 5;
+
+   --  Set when there is a link. Latched low, so a driver reading it once
+   --  after a cable was pulled and replaced sees the pull rather than the
+   --  link, and has to read twice.
+   PHY_Link_Is_Up : constant U16 := 2 ** 2;
+
+   --  Asks for a link and waits until the device reports one.
+   --
+   --  Nothing before this needed it. A frame sent in loopback comes back
+   --  whatever the link is doing, because it never reaches the wire — so a
+   --  device with no link passes every loopback test there is and sends
+   --  nothing at all. This is what has to happen before a frame can leave.
+   --
+   --  @param BAR The device's mapped registers
+   --  @param Attempts How many times to poll before giving up
+   --  @return True when the device reports a link
+   function Wait_For_Link
+     (BAR : Regions.Window; Attempts : Positive := 20_000) return Boolean;
+
    --  Where a descriptor ring lives, as both addresses of the same bytes.
    --
    --  @field Host Where this process writes and reads descriptors
    --  @field Device The address the controller is given
    --  @field Count How many descriptors the ring holds
+   --  @field Queue Which of the device's queues this ring is
    type Ring_Location is record
       Host   : System.Address;
       Device : U64;
       Count  : Positive;
+      Queue  : Queue_Index := 0;
    end record;
 
    --  Points the device at a receive ring and enables receiving.
@@ -541,8 +747,11 @@ package Flyology_VFIO_QEMU.E1000E is
    --  @param Ring Where the receive ring lives
    --  @param Slot Which descriptor to read
    --  @return What the device wrote there
+   --  @param Format Which layout the device is writing into this ring
    function Peek_Received
-     (Ring : Ring_Location; Slot : Natural) return Received_Frame;
+     (Ring   : Ring_Location;
+      Slot   : Natural;
+      Format : Descriptor_Format := Legacy) return Received_Frame;
 
    --  Waits for a frame to arrive in one descriptor.
    --  @param Ring Where the receive ring lives

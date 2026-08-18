@@ -95,13 +95,14 @@ procedure E1000E_Coverage_Tests is
       Described (16#02808#, "Receive Ring Length", True),
       Described (16#02810#, "Receive Ring Head", True),
       Described (16#02818#, "Receive Ring Tail", True),
-      Described (16#02828#, "Receive Delay Timer"),
+      Described (16#02820#, "Receive Delay Timer", True),
+      Described (16#0282C#, "Receive Absolute Delay", True),
       Described (16#03800#, "Transmit Ring Base Low", True),
       Described (16#03804#, "Transmit Ring Base High", True),
       Described (16#03808#, "Transmit Ring Length", True),
       Described (16#03810#, "Transmit Ring Head", True),
       Described (16#03818#, "Transmit Ring Tail", True),
-      Described (16#03820#, "Transmit Delay Timer"),
+      Described (16#0382C#, "Transmit Absolute Delay", True),
       Described (16#04000#, "CRC Error Count", True),
       Described (16#04074#, "Good Packets Received", True),
       Described (16#04080#, "Good Packets Sent", True),
@@ -118,9 +119,18 @@ procedure E1000E_Coverage_Tests is
       Described (16#05600#, "VLAN Filter Table Array", True),
       Described (16#05400#, "Receive Address Low", True),
       Described (16#05404#, "Receive Address High", True),
-      Described (16#00028#, "Flow Control Address Low"),
-      Described (16#0002C#, "Flow Control Address High"),
-      Described (16#00030#, "Flow Control Type"),
+      Described (16#00028#, "Flow Control Address Low", True),
+      Described (16#0002C#, "Flow Control Address High", True),
+      Described (16#00030#, "Flow Control Type", True),
+      Described (16#00170#, "Flow Control Timer", True),
+      Described (16#02160#, "Flow Control High Water", True),
+      Described (16#02168#, "Flow Control Low Water", True),
+      Described (16#02900#, "Receive Ring 1 Base Low", True),
+      Described (16#03900#, "Transmit Ring 1 Base Low", True),
+      Described (16#05008#, "Receive Filter Control", True),
+      Described (16#05818#, "Multiple Receive Queues", True),
+      Described (16#05C00#, "Redirection Table", True),
+      Described (16#05C80#, "Hash Key", True),
       Described (16#05F00#, "Wake Up Control")];
 
    --  A register that answers nothing reads as every bit set, because
@@ -133,7 +143,7 @@ procedure E1000E_Coverage_Tests is
       else "52:54:00:12:34:56");
 
    --  What the functional suite reached when this floor was last reviewed.
-   Coverage_Floor : constant := 38;
+   Coverage_Floor : constant := 52;
 begin
    declare
       Where : constant String := Find (NIC.Vendor_ID, NIC.Device_ID);

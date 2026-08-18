@@ -101,17 +101,41 @@ for d in /sys/bus/pci/devices/*; do
     "$(cat $d/device)" "$(basename $(readlink $d/iommu_group))"
 done'
 
+#  The peer the frame tests talk to. It is the guest's own kernel on the
+#  same virtual hub as the controller under test, so a reply comes from a
+#  protocol stack rather than from the device agreeing with itself.
+#
+#  A static address rather than one leased, because a test that has to
+#  discover which address it is talking to cannot tell a wrong reply from no
+#  reply. The interface is found by the address it was given rather than by
+#  name, since names depend on probe order.
+peer_mac=${FLYOLOGY_DEVICE_VM_PEER_MAC:-52:54:00:12:34:57}
+#  Not 10.0.2.15: that is the address QEMU's own user networking hands
+#  out by default, and a peer sharing it would make two things on the hub
+#  answer for one address.
+peer_ip=${FLYOLOGY_DEVICE_VM_PEER_IP:-10.0.2.50}
+
+run_in_guest "for n in /sys/class/net/*; do
+  [ \"\$(cat \$n/address 2>/dev/null)\" = \"$peer_mac\" ] || continue
+  i=\$(basename \$n)
+  ip link set \$i up
+  ip addr flush dev \$i 2>/dev/null
+  ip addr add $peer_ip/24 dev \$i
+  printf 'peer %s is %s at %s\n' \$i $peer_mac $peer_ip
+done"
+
 #  The values the guest was started with are passed to the tests that read
 #  them back out of a device, so that the harness and the tests cannot
 #  disagree about what the corpus is. A test that made up its own expected
 #  value would be checking itself.
 corpus="FLYOLOGY_DEVICE_VM_MAC=${FLYOLOGY_DEVICE_VM_MAC:-52:54:00:12:34:56}"
 corpus="$corpus FLYOLOGY_DEVICE_VM_NVME_SERIAL=${FLYOLOGY_DEVICE_VM_NVME_SERIAL:-flyology0001}"
+corpus="$corpus FLYOLOGY_DEVICE_VM_PEER_MAC=$peer_mac FLYOLOGY_DEVICE_VM_PEER_IP=$peer_ip"
 
 for suite in edu_tests container_sharing_tests pci_testdev_tests \
              nvme_tests e1000e_tests \
              nvme_coverage_tests e1000e_coverage_tests msix_tests \
-             nvme_queues_tests nvme_zoned_tests nvme_copy_tests nvme_blocks_tests e1000e_filter_tests; do
+             nvme_queues_tests nvme_zoned_tests nvme_copy_tests nvme_blocks_tests e1000e_filter_tests e1000e_queues_tests e1000e_peer_tests; do
   printf '\n== %s ==\n' "$suite"
   run_in_guest "$corpus /mnt/share/$suite" || status=1
 done

@@ -286,11 +286,13 @@ begin
                Receive_Ring : constant NIC.Ring_Location :=
                  (Host   => Host + SSE.Storage_Offset (Receive_Ring_Offset),
                   Device => U64 (Window_Base) + U64 (Receive_Ring_Offset),
-                  Count  => Ring_Slots);
+                  Count  => Ring_Slots,
+                  Queue  => 0);
                Transmit_Ring : constant NIC.Ring_Location :=
                  (Host   => Host + SSE.Storage_Offset (Transmit_Ring_Offset),
                   Device => U64 (Window_Base) + U64 (Transmit_Ring_Offset),
-                  Count  => Ring_Slots);
+                  Count  => Ring_Slots,
+                  Queue  => 0);
 
                Receive_Buffers : constant U64 :=
                  U64 (Window_Base) + U64 (Receive_Buffers_Offset);

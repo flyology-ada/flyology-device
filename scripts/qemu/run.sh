@@ -66,12 +66,32 @@ vm_pidfile="$state/qemu.pid"
 #  tests read them back out of the devices and compare. A value chosen here
 #  and recovered through MMIO is worth more than a self-consistency check.
 #
-#  The Intel controller gets a network backend of its own. That backend is
-#  what makes a frame test possible: QEMU's user networking answers address
-#  resolution for its gateway, so a driver that transmits a request and
-#  receives the reply has demonstrated both directions of a working ring
-#  rather than just a register that accepted a write.
+#  The Intel controller shares a virtual hub with two other things rather
+#  than having a backend to itself, and the reason is worth stating.
+#
+#  A loopback test proves a device agrees with itself. Both directions run
+#  through the same emulated code and a frame that is wrong in some way that
+#  code does not care about comes back looking correct. QEMU's user
+#  networking is one step better — it answers address resolution for its
+#  gateway, so a reply arrives from something that is not the device — but
+#  it is a translation layer rather than a protocol stack, and it terminates
+#  what it is sent.
+#
+#  So the hub also carries a network card the guest kernel keeps. That gives
+#  the tests a real stack on the same wire: one that answers address
+#  resolution, replies to echo requests, refuses connections to closed ports
+#  with a reset, and reports unreachable ports — all of which require the
+#  frames it is sent to be correct in every field, because a stack silently
+#  drops a segment whose checksum is wrong rather than complaining about it.
+#  A reply is therefore proof the frame was right, which no amount of
+#  looping back to the sender can establish.
+#
+#  It is a virtio card and not a second Intel one on purpose. The tests bind
+#  devices to vfio-pci by their identity, so a second controller of the same
+#  model would be bound too and the kernel would lose the interface this
+#  depends on.
 device_mac=${FLYOLOGY_DEVICE_VM_MAC:-52:54:00:12:34:56}
+peer_mac=${FLYOLOGY_DEVICE_VM_PEER_MAC:-52:54:00:12:34:57}
 device_serial=${FLYOLOGY_DEVICE_VM_NVME_SERIAL:-flyology0001}
 
 devices=${FLYOLOGY_DEVICE_VM_DEVICES:-"
@@ -86,8 +106,12 @@ devices=${FLYOLOGY_DEVICE_VM_DEVICES:-"
   -device nvme-ns,drive=nvmedisk,nsid=1
   -device nvme-ns,drive=nvmezoned,nsid=2,zoned=on,zoned.zone_size=1M,zoned.zone_capacity=1M
   -device nvme-ns,drive=nvmespare,nsid=3,detached=on
-  -netdev user,id=nic1,net=10.0.2.0/24,host=10.0.2.2
-  -device e1000e,netdev=nic1,mac=$device_mac,romfile=
+  -netdev user,id=slirp,net=10.0.2.0/24,host=10.0.2.2
+  -netdev hubport,id=hubslirp,hubid=1,netdev=slirp
+  -netdev hubport,id=hubwire,hubid=1
+  -device e1000e,netdev=hubwire,mac=$device_mac,romfile=
+  -netdev hubport,id=hubpeer,hubid=1
+  -device virtio-net-pci,netdev=hubpeer,mac=$peer_mac,romfile=
 "}
 
 is_running () {

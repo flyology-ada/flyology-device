@@ -132,11 +132,13 @@ begin
                RX : constant NIC.Ring_Location :=
                  (Host   => At_Host (RX_Ring_Offset),
                   Device => At_Device (RX_Ring_Offset),
-                  Count  => Ring_Slots);
+                  Count  => Ring_Slots,
+                  Queue  => 0);
                TX : constant NIC.Ring_Location :=
                  (Host   => At_Host (TX_Ring_Offset),
                   Device => At_Device (TX_Ring_Offset),
-                  Count  => Ring_Slots);
+                  Count  => Ring_Slots,
+                  Queue  => 0);
 
                Everything : array (1 .. Scratch_Bytes) of U8
                  with Import, Volatile, Address => Host;

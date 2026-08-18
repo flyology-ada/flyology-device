@@ -324,13 +324,17 @@ package body Flyology_VFIO_QEMU.E1000E is
          end;
       end loop;
 
-      Reg.Write_32 (BAR, Receive_Base_Low_Register,
-                    U32 (Ring.Device and 16#FFFF_FFFF#));
-      Reg.Write_32 (BAR, Receive_Base_High_Register,
-                    U32 (Interfaces.Shift_Right (Ring.Device, 32)));
-      Reg.Write_32 (BAR, Receive_Length_Register,
-                    U32 (Ring.Count * Descriptor_Bytes));
-      Reg.Write_32 (BAR, Receive_Head_Register, 0);
+      declare
+         Base : constant Natural := Receive_Ring_Base (Ring.Queue);
+      begin
+         Reg.Write_32 (BAR, Reg.Offset (Base),
+                       U32 (Ring.Device and 16#FFFF_FFFF#));
+         Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Base_High),
+                       U32 (Interfaces.Shift_Right (Ring.Device, 32)));
+         Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Length),
+                       U32 (Ring.Count * Descriptor_Bytes));
+         Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Head), 0);
+      end;
 
       --  Enabling before advancing the tail, so the device is running by
       --  the time it is given descriptors to run on.
@@ -341,7 +345,8 @@ package body Flyology_VFIO_QEMU.E1000E is
       --  The tail names the descriptor after the last one the driver owns,
       --  so a full ring points one short of itself.
       Reg.Write_Release_32
-        (BAR, Receive_Tail_Register, U32 (Ring.Count - 1));
+        (BAR, Reg.Offset (Receive_Ring_Base (Ring.Queue) + Ring_Tail),
+         U32 (Ring.Count - 1));
    end Start_Receiving;
 
    -------------------------
@@ -356,14 +361,18 @@ package body Flyology_VFIO_QEMU.E1000E is
    begin
       Whole := (others => 0);
 
-      Reg.Write_32 (BAR, Transmit_Base_Low_Register,
-                    U32 (Ring.Device and 16#FFFF_FFFF#));
-      Reg.Write_32 (BAR, Transmit_Base_High_Register,
-                    U32 (Interfaces.Shift_Right (Ring.Device, 32)));
-      Reg.Write_32 (BAR, Transmit_Length_Register,
-                    U32 (Ring.Count * Descriptor_Bytes));
-      Reg.Write_32 (BAR, Transmit_Head_Register, 0);
-      Reg.Write_32 (BAR, Transmit_Tail_Register, 0);
+      declare
+         Base : constant Natural := Transmit_Ring_Base (Ring.Queue);
+      begin
+         Reg.Write_32 (BAR, Reg.Offset (Base),
+                       U32 (Ring.Device and 16#FFFF_FFFF#));
+         Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Base_High),
+                       U32 (Interfaces.Shift_Right (Ring.Device, 32)));
+         Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Length),
+                       U32 (Ring.Count * Descriptor_Bytes));
+         Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Head), 0);
+         Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Tail), 0);
+      end;
 
       --  The inter-packet gap the datasheet gives for copper gigabit.
       Reg.Write_32 (BAR, Transmit_Gap_Register, 8 or 16#0002_0000#);
@@ -449,7 +458,7 @@ package body Flyology_VFIO_QEMU.E1000E is
       --  descriptor and of the frame it points at must be visible to the
       --  device before the device is told the descriptor is ready.
       Reg.Write_Release_32
-        (BAR, Transmit_Tail_Register,
+        (BAR, Reg.Offset (Transmit_Ring_Base (Ring.Queue) + Ring_Tail),
          U32 ((Slot + 1) mod Ring.Count));
 
       loop
@@ -473,19 +482,41 @@ package body Flyology_VFIO_QEMU.E1000E is
    ---------------------
 
    function Peek_Received
-     (Ring : Ring_Location; Slot : Natural) return Received_Frame
+     (Ring   : Ring_Location;
+      Slot   : Natural;
+      Format : Descriptor_Format := Legacy) return Received_Frame
    is
       At_Offset : constant Natural := Slot * Descriptor_Bytes;
       Status    : constant U8 := Get_8 (Ring.Host, At_Offset + 12);
    begin
-      return
-        (Arrived  => (Status and Descriptor_Done) /= 0,
-         Length   => Natural (Get_16 (Ring.Host, At_Offset + 8)),
-         Complete => (Status and Descriptor_End_Of_Packet) /= 0,
-         Errors   => Get_8 (Ring.Host, At_Offset + 13),
-         Status   => Status,
-         VLAN_Tag => Get_16 (Ring.Host, At_Offset + 14),
-         Checksum => Get_16 (Ring.Host, At_Offset + 10));
+      if Format = Legacy then
+         return
+           (Arrived  => (Status and Descriptor_Done) /= 0,
+            Length   => Natural (Get_16 (Ring.Host, At_Offset + 8)),
+            Complete => (Status and Descriptor_End_Of_Packet) /= 0,
+            Errors   => Get_8 (Ring.Host, At_Offset + 13),
+            Status   => Status,
+            VLAN_Tag => Get_16 (Ring.Host, At_Offset + 14),
+            Checksum => Get_16 (Ring.Host, At_Offset + 10));
+      end if;
+
+      --  The longer layout puts status and errors in one thirty-two bit
+      --  field rather than two bytes, and the errors at the far end of it.
+      --  They land on the same bit positions once the field is taken apart,
+      --  which is a kindness and not an accident.
+      declare
+         Extended_Status : constant U8 := Get_8 (Ring.Host, At_Offset + 8);
+      begin
+         return
+           (Arrived  => (Extended_Status and Descriptor_Done) /= 0,
+            Length   => Natural (Get_16 (Ring.Host, At_Offset + 12)),
+            Complete =>
+              (Extended_Status and Descriptor_End_Of_Packet) /= 0,
+            Errors   => Get_8 (Ring.Host, At_Offset + 11),
+            Status   => Extended_Status,
+            VLAN_Tag => Get_16 (Ring.Host, At_Offset + 14),
+            Checksum => Get_16 (Ring.Host, At_Offset + 4));
+      end;
    end Peek_Received;
 
    ----------------------
@@ -531,7 +562,9 @@ package body Flyology_VFIO_QEMU.E1000E is
    begin
       Blank := (others => 0);
       Put_64 (Ring.Host, At_Offset, Buffer);
-      Reg.Write_Release_32 (BAR, Receive_Tail_Register, U32 (Slot));
+      Reg.Write_Release_32
+        (BAR, Reg.Offset (Receive_Ring_Base (Ring.Queue) + Ring_Tail),
+         U32 (Slot));
    end Recycle_Received;
 
    -----------
@@ -564,6 +597,37 @@ package body Flyology_VFIO_QEMU.E1000E is
       --  read meaningfully; the datasheet asks for a millisecond.
       Wait_Microseconds (2_000);
    end Reset;
+
+   --------------------------
+   -- Wait_For_Link --
+   --------------------------
+
+   function Wait_For_Link
+     (BAR : Regions.Window; Attempts : Positive := 20_000) return Boolean
+   is
+      Polls : Natural := 0;
+   begin
+      --  Asking for the link is a bit in the control register, and getting
+      --  one is a bit in the status register that appears some time later:
+      --  the two ends have to agree a speed first, and that is a
+      --  negotiation with its own timer. A driver that writes the first bit
+      --  and transmits immediately transmits into a link that is not up.
+      Reg.Write_32
+        (BAR, Control_Register,
+         Reg.Read_32 (BAR, Control_Register) or Control_Set_Link_Up);
+
+      loop
+         if (Reg.Read_Acquire_32 (BAR, Status_Register) and Status_Link_Up)
+              /= 0
+         then
+            return True;
+         end if;
+         Polls := Polls + 1;
+         exit when Polls >= Attempts;
+         Wait_Microseconds (100);
+      end loop;
+      return False;
+   end Wait_For_Link;
 
    -------------------------------------
    -- Receive_Buffer_Size_Bits --
@@ -692,5 +756,48 @@ package body Flyology_VFIO_QEMU.E1000E is
    begin
       return (Reg.Read_32 (BAR, Where) and Mask) /= 0;
    end VLAN_Filter_Allows;
+
+   ---------------------------------
+   -- Steer_Everything_To --
+   ---------------------------------
+
+   procedure Steer_Everything_To
+     (BAR : Regions.Window; Queue : Queue_Index)
+   is
+      --  One byte per entry, of which this controller reads the *highest*
+      --  bit — not the lowest, which is where a reader who knows the field
+      --  is one bit wide will put it, and which produces a table that reads
+      --  back exactly as written and steers nothing. Written four entries
+      --  at a time because the register file is thirty-two bits wide
+      --  however narrow the field is.
+      Cell : constant U32 := Interfaces.Shift_Left (U32 (Queue), 7);
+      Word : constant U32 :=
+        Cell
+        or Interfaces.Shift_Left (Cell, 8)
+        or Interfaces.Shift_Left (Cell, 16)
+        or Interfaces.Shift_Left (Cell, 24);
+   begin
+      for Index in 0 .. Redirection_Table_Bytes / 4 - 1 loop
+         Reg.Write_32
+           (BAR, Reg.Offset (Redirection_Table_Register + 4 * Index), Word);
+      end loop;
+   end Steer_Everything_To;
+
+   -------------------------
+   -- Set_Hash_Key --
+   -------------------------
+
+   procedure Set_Hash_Key (BAR : Regions.Window; Seed : U32) is
+      Value : U32 := Seed;
+   begin
+      for Index in 0 .. Hash_Key_Bytes / 4 - 1 loop
+         Reg.Write_32
+           (BAR, Reg.Offset (Hash_Key_Register + 4 * Index), Value);
+         --  Any spreading function will do: the key is a secret rather than
+         --  a structure, and what matters for a test is that it is the same
+         --  secret every run.
+         Value := Value * 1_664_525 + 1_013_904_223;
+      end loop;
+   end Set_Hash_Key;
 
 end Flyology_VFIO_QEMU.E1000E;

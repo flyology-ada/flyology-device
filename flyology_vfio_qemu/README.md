@@ -158,6 +158,23 @@ command here moves at most two mebibytes however large the controller says
 its own limit is. A transfer needing a chained list is refused rather than
 described wrongly.
 
+**Receive-side scaling and receive checksum offload are mutually
+exclusive.** The hash goes in the four descriptor bytes the checksum would
+occupy, so the device reports one or the other. Scaling therefore requires
+the packet checksum to be switched *off* and the longer descriptor layout
+to be switched on, neither of which reads like a prerequisite for hashing.
+Leave either alone and every frame lands on the first queue, with the
+redirection table reading back exactly as written.
+
+**Nothing is hashed on the loopback path.** The device steers frames that
+arrive from outside and sends frames it transmitted to itself straight to
+the first queue, so scaling cannot be observed without a peer on the wire.
+
+**The redirection table's queue is bit seven of each byte.** Not bit zero,
+which is where a reader who knows the field is one bit wide will put it,
+and which yields a table that reads back exactly as written and steers
+nothing.
+
 **A hash match is indistinguishable from an exact one.** The receive
 descriptor's passed-inexact-filter bit is never set: a frame that reached
 the host through the multicast hash carries the same status byte as one
