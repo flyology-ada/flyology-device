@@ -21,6 +21,13 @@ for crate in flyology_dma flyology_vfio; do
   fi
 done
 
+#  A build that wrote outside its object directory is a defect in the build,
+#  not a nuisance to be cleaned up afterwards. Checking here means every full
+#  test run notices.
+if ! "$repo_root/scripts/check-tree-clean.sh"; then
+  status=1
+fi
+
 if [ "$ran" -eq 0 ]; then
   printf '%s\n' "No crate provides scripts/test.sh" >&2
   exit 2

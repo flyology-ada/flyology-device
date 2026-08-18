@@ -47,7 +47,7 @@ RUN printf '%s\n' \
       'exec "$@"' \
     > /usr/local/bin/with-toolchain \
  && chmod +x /usr/local/bin/with-toolchain \
- && with-toolchain gnatmake --version | head -1
+ && with-toolchain gprbuild --version | head -1
 
 WORKDIR /repo
 ENTRYPOINT ["/usr/local/bin/with-toolchain"]
