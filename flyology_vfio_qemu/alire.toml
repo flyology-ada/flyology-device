@@ -1,0 +1,29 @@
+name = "flyology_vfio_qemu"
+description = "Bring-up harness driving QEMU's virtual PCI devices through flyology_vfio"
+version = "0.1.0-dev"
+licenses = "MIT OR Apache-2.0"
+authors = ["Yurii Rashkovskii"]
+maintainers = ["Yurii Rashkovskii <yrashk@gmail.com>"]
+maintainers-logins = ["yrashk"]
+website = "https://flyology.org/"
+project-files = ["flyology_vfio_qemu.gpr"]
+tags = ["ada", "vfio", "qemu", "pci", "testing"]
+
+[[depends-on]]
+flyology_vfio = "~0.1.0-dev"
+flyology_dma = "~0.1.0-dev"
+
+[[pins]]
+flyology_vfio = { path = "../flyology_vfio" }
+flyology_dma = { path = "../flyology_dma" }
+
+[build-switches]
+"*".ada_version = "Ada2022"
+development.optimization = "Debug"
+development.compile_checks = "Errors"
+release.optimization = "Performance"
+release.compile_checks = "Warnings"
+
+[[actions]]
+type = "test"
+command = ["./scripts/test.sh"]

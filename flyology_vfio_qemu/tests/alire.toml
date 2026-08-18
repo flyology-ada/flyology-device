@@ -1,0 +1,14 @@
+name = "flyology_vfio_qemu_tests"
+description = "Device tests for flyology_vfio_qemu"
+version = "0.1.0-dev"
+licenses = "MIT OR Apache-2.0"
+authors = ["Yurii Rashkovskii"]
+maintainers = ["Yurii Rashkovskii <yrashk@gmail.com>"]
+maintainers-logins = ["yrashk"]
+executables = ["edu_tests", "pci_testdev_tests"]
+
+[[depends-on]]
+flyology_vfio_qemu = "*"
+
+[[pins]]
+flyology_vfio_qemu = { path = ".." }

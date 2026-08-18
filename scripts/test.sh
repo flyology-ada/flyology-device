@@ -11,7 +11,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 status=0
 ran=0
-for crate in flyology_dma flyology_vfio; do
+for crate in flyology_dma flyology_vfio flyology_vfio_qemu; do
   script="$repo_root/$crate/scripts/test.sh"
   [ -x "$script" ] || continue
   ran=$((ran + 1))

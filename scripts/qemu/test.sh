@@ -30,7 +30,8 @@ for project in \
   flyology_dma/tests/flyology_dma_tests.gpr \
   flyology_dma/showcases/flyology_dma_showcases.gpr \
   flyology_vfio/tests/flyology_vfio_tests.gpr \
-  flyology_vfio/showcases/flyology_vfio_showcases.gpr
+  flyology_vfio/showcases/flyology_vfio_showcases.gpr \
+  flyology_vfio_qemu/tests/flyology_vfio_qemu_tests.gpr
 do
   printf "  %s\n" "$project" >&2
   gprbuild -q -p -j0 -P "$project"
@@ -54,6 +55,7 @@ stage flyology_dma tests ""
 stage flyology_dma showcases "dma_"
 stage flyology_vfio tests ""
 stage flyology_vfio showcases "vfio_"
+stage flyology_vfio_qemu tests ""
 printf '%s\n' "staged $(ls "$staging" | wc -l | tr -d ' ') programs" >&2
 
 #  Hugepages are reserved here rather than by any library: reserving them
@@ -73,6 +75,15 @@ run_in_guest 'mkdir -p /mnt/share; mountpoint -q /mnt/share || mount -t 9p -o tr
 status=0
 for suite in scalar_tests address_space_tests region_tests mapper_tests \
              pool_tests thin_tests lifecycle_tests; do
+  printf '\n== %s ==\n' "$suite"
+  run_in_guest "/mnt/share/$suite" || status=1
+done
+
+#  The device tests need their devices bound to vfio-pci. Binding is done
+#  here, on a guest that exists to be changed, and never by a library.
+run_in_guest 'modprobe vfio-pci 2>/dev/null; for a in $(ls /sys/bus/pci/devices); do v=$(cat /sys/bus/pci/devices/$a/vendor); d=$(cat /sys/bus/pci/devices/$a/device); case "$v:$d" in "0x1234:0x11e8"|"0x1b36:0x0005") echo vfio-pci > /sys/bus/pci/devices/$a/driver_override; echo $a > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null; printf "bound %s (%s:%s)\\n" "$a" "$v" "$d";; esac; done'
+
+for suite in edu_tests pci_testdev_tests; do
   printf '\n== %s ==\n' "$suite"
   run_in_guest "/mnt/share/$suite" || status=1
 done

@@ -55,11 +55,18 @@ procedure Bring_Up is
       return Result;
    end Hex;
 
-   --  An IOVA window chosen well away from anything a host virtual address
-   --  would occupy, so that a value printed below is obviously one or the
-   --  other. A real driver would take the window from the IOMMU's reported
-   --  address ranges instead.
-   Window_Base : constant DMA.IOVA_Address := 16#0000_4000_0000_0000#;
+   --  An IOVA window away from anything a host virtual address would
+   --  occupy, so that a value printed below is obviously one or the other,
+   --  and low enough that every IOMMU can translate it.
+   --
+   --  The second half of that matters and is easy to miss: an IOMMU
+   --  advertises an input address size, and this repository's own tests
+   --  first used an address above it. VFIO_IOMMU_MAP_DMA accepted the
+   --  mapping, and the failure appeared only when a device tried to follow
+   --  the address. A driver should read the IOMMU's advertised ranges
+   --  rather than pick, which is a capability-chain query this crate does
+   --  not yet make.
+   Window_Base : constant DMA.IOVA_Address := 16#0000_0001_0000_0000#;
 begin
    if CL.Argument_Count /= 1 then
       IO.Put_Line ("usage: bring_up <pci-address>, e.g. 0000:00:02.0");
