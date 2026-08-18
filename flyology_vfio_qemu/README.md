@@ -62,10 +62,19 @@ are handed to the device, the link is brought up, and an address resolution
 request for the gateway is transmitted. QEMU's user networking answers it,
 and the reply is checked: that it is a reply rather than a request, that it
 is addressed to the hardware address the device reported, and that it
-answers for the address that was asked about. The device's own counters are
-then read to confirm it agrees one frame went each way — and read again to
-confirm they clear on reading, which is why such a register must never be
-read-modify-written.
+answers for the address that was asked about.
+
+A second frame is then sent in loopback, where the device routes it
+straight back into its own receive path. That proves both rings without
+anything attached, which the exchange above cannot: that one depends on
+something outside the guest choosing to answer.
+
+The interrupt cause register is provoked and read twice, showing that
+reading it is what acknowledges it — the sharpest example of why a status
+register must never be read-modify-written, since there the read is the
+acknowledgement. Finally the counters are read: frames and octets in both
+directions, broadcasts, checksum errors and misses, each clearing as it is
+read.
 
 ## Measuring coverage instead of claiming it
 
@@ -91,11 +100,11 @@ What they currently report:
 
 | Surface | Implemented | Exercised |
 | --- | --- | --- |
-| NVMe admin commands | 13 of 25 probed (7 more deliberately not probed) | 8 |
-| NVMe namespace commands | 15 of 15 probed | 6 |
+| NVMe admin commands | 13 of 25 probed (7 more deliberately not probed) | 9 |
+| NVMe namespace commands | 15 of 15 probed | 8 |
 | NVMe features | 12 of 32 answer without a namespace | 3 driven, 2 round-tripped |
 | NVMe logs | 5 of 16 | 3 |
-| e1000e registers | 42 of 42 probed answer | 28 |
+| e1000e registers | 42 of 42 probed answer | 34 |
 | e1000e physical-layer registers | 23 of 32 | 3 |
 
 ## What the emulated devices do not implement
@@ -124,16 +133,24 @@ controller-scope feature named with a namespace identifier is refused, and a
 per-namespace feature without one likewise. Both refusals are correct and
 both are easy to read as the controller being wrong.
 
+**Write Uncorrectable is advertised and refused.** The probe sees it
+answered with something other than Invalid Command Opcode, so it counts as
+present, and the functional test then finds the namespace will not accept
+it. Both are true: QEMU's command-set table lists it and this namespace's
+configuration does not support it. The functional test skips that path by
+name rather than pretending, which is the distinction the probe cannot draw
+on its own — it counts what is present, not what would succeed.
+
 **The e1000e answers every register probed**, which makes "does it answer"
 a weak signal on this device: QEMU marks a number of them internally as
 partial implementations that store a written value and give it back.
 Its source records timestamp processing, SNAP, and iSCSI and NFS filtering
 as unimplemented.
 
-**It supports internal loopback** through the receive control register,
-which would make a frame test independent of any network backend. The
-current frame test uses the real backend instead, because an exchange with
-something outside the guest is the stronger evidence.
+**Its interrupt mask registers cannot be read back**, one setting bits and
+the other clearing them, so the only thing checkable about them is that
+they accept a write. The cause register can be read, and reading it is what
+acknowledges it — which the test demonstrates by reading twice.
 
 ## Corpora chosen outside the program
 
@@ -218,7 +235,7 @@ error anywhere. `flyology_vfio` had no unmask operation at all; it now has
 
 All seven suites pass in the repository's virtual machine against an
 emulated SMMUv3: `edu_tests` at 29 checks, `container_sharing_tests` at 18,
-`pci_testdev_tests` at 10, `nvme_tests` at 64, `e1000e_tests` at 30,
+`pci_testdev_tests` at 10, `nvme_tests` at 67, `e1000e_tests` at 40,
 `nvme_coverage_tests` at 11 and `e1000e_coverage_tests` at 7.
 
 ## Licence

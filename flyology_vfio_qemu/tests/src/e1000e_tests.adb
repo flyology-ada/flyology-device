@@ -411,6 +411,128 @@ begin
                     (BAR, Receive_Ring, Slot => 0, Buffer => Receive_Buffers);
                end;
 
+               ------------------------------------------------------
+               --  Interrupt causes, which acknowledge by being read
+               ------------------------------------------------------
+
+               --  A cause register that clears when read is the sharpest
+               --  example of why Flyology_VFIO.Registers warns against
+               --  read-modify-writing a status register: here the read is
+               --  the acknowledgement, so a driver that reads to modify
+               --  has already thrown the event away.
+               declare
+                  Raised  : constant U32 :=
+                    NIC.Interrupt_Link_Change or NIC.Interrupt_Transmit_Done;
+                  Ignored : U32;
+                  First   : U32;
+                  Second  : U32;
+               begin
+                  --  Masked off first, so provoking a cause cannot deliver
+                  --  an interrupt to a handler that does not exist.
+                  Reg.Write_32
+                    (BAR, NIC.Interrupt_Mask_Clear_Register, 16#FFFF_FFFF#);
+
+                  --  Read once to clear whatever had accumulated, so that
+                  --  what follows is only what this test provoked.
+                  Ignored := Reg.Read_32 (BAR, NIC.Interrupt_Cause_Register);
+                  pragma Unreferenced (Ignored);
+
+                  Reg.Write_Release_32
+                    (BAR, NIC.Interrupt_Cause_Set_Register, Raised);
+                  First := Reg.Read_32 (BAR, NIC.Interrupt_Cause_Register);
+                  Second := Reg.Read_32 (BAR, NIC.Interrupt_Cause_Register);
+
+                  Harness.Note
+                    ("causes read 0x" & Hex_32 (First) & " then 0x"
+                     & Hex_32 (Second));
+                  Harness.Check
+                    ((First and Raised) = Raised,
+                     "the causes that were provoked are reported");
+                  Harness.Check
+                    ((Second and Raised) = 0,
+                     "and are gone on the second read, because reading the"
+                     & " cause register is what acknowledges it");
+               end;
+
+               --  The mask registers, which are write-only in one
+               --  direction each: one sets bits, the other clears them,
+               --  and neither can be read back to see the result. Checking
+               --  they are accepted is all that can be checked.
+               declare
+                  Wanted : constant U32 := NIC.Interrupt_Receive_Timer;
+               begin
+                  Reg.Write_32 (BAR, NIC.Interrupt_Mask_Set_Register, Wanted);
+                  Reg.Write_32
+                    (BAR, NIC.Interrupt_Mask_Clear_Register, Wanted);
+                  Harness.Check
+                    (True,
+                     "the interrupt mask registers accept being set and"
+                     & " cleared");
+               end;
+
+               ------------------------------------------------------
+               --  A frame that never leaves the device
+               ------------------------------------------------------
+
+               --  Loopback routes transmitted frames straight back into
+               --  the receive path. It proves both rings without anything
+               --  attached to the device, which the exchange above cannot:
+               --  that one depends on something outside the guest choosing
+               --  to answer.
+               declare
+                  Slot : constant Natural := 1;
+                  Marker : constant U8 := 16#5A#;
+               begin
+                  Reg.Write_Release_32
+                    (BAR, NIC.Receive_Control_Register,
+                     NIC.Receive_Enable or NIC.Receive_Broadcast
+                     or NIC.Receive_Strip_CRC or NIC.Receive_Loopback);
+
+                  Frame_Bytes := (others => Marker);
+                  for Index in 0 .. 5 loop
+                     Frame_Bytes (Index) := Ours (Index + 1);
+                     Frame_Bytes (6 + Index) := Ours (Index + 1);
+                  end loop;
+                  Frame_Bytes (12) := 16#88#;
+                  Frame_Bytes (13) := 16#B5#;
+
+                  NIC.Transmit
+                    (BAR, Transmit_Ring, Slot => Slot,
+                     Frame => Transmit_Frame, Length => 64);
+
+                  declare
+                     Arrived : constant NIC.Received_Frame :=
+                       NIC.Await_Received (Receive_Ring, Slot => Slot);
+                     Looped : array (0 .. 2047) of U8
+                       with Import, Volatile,
+                            Address =>
+                              Host
+                              + SSE.Storage_Offset (Receive_Buffers_Offset)
+                              + SSE.Storage_Offset
+                                  (Slot * NIC.Receive_Buffer_Bytes);
+                  begin
+                     Harness.Check
+                       (Arrived.Arrived,
+                        "a frame sent in loopback comes back without"
+                        & " leaving the device");
+                     Harness.Check_Equal
+                       (U32 (Arrived.Errors), 0,
+                        "and arrives without an error");
+                     Harness.Check
+                       (Looped (12) = 16#88# and then Looped (13) = 16#B5#,
+                        "carrying the protocol number it was sent with");
+                     Harness.Check
+                       (Looped (20) = Marker and then Looped (60) = Marker,
+                        "and its payload, which nothing outside the device"
+                        & " could have supplied");
+                  end;
+
+                  Reg.Write_Release_32
+                    (BAR, NIC.Receive_Control_Register,
+                     NIC.Receive_Enable or NIC.Receive_Broadcast
+                     or NIC.Receive_Strip_CRC);
+               end;
+
                --  The device's own counters. Both clear when read, which
                --  is why they are read once and compared rather than read
                --  twice.
@@ -432,6 +554,44 @@ begin
                        (BAR, NIC.Good_Packets_Transmitted_Register) = 0,
                      "the counter cleared when it was read, which is why a"
                      & " read-modify-write of such a register loses counts");
+
+                  --  The wider set of counters, which between them account
+                  --  for every frame and every octet the device handled.
+                  declare
+                     Total_Sent     : constant U32 :=
+                       Reg.Read_32 (BAR, 16#040D4#);
+                     Total_Received : constant U32 :=
+                       Reg.Read_32 (BAR, 16#040D0#);
+                     Octets_Sent    : constant U32 :=
+                       Reg.Read_32 (BAR, 16#040C8#);
+                     Octets_Received : constant U32 :=
+                       Reg.Read_32 (BAR, 16#040C0#);
+                     Broadcast      : constant U32 :=
+                       Reg.Read_32 (BAR, 16#04030#);
+                     CRC_Errors     : constant U32 :=
+                       Reg.Read_32 (BAR, 16#04000#);
+                     Missed         : constant U32 :=
+                       Reg.Read_32 (BAR, 16#04010#);
+                  begin
+                     Harness.Note
+                       ("totals:" & U32'Image (Total_Sent) & " sent,"
+                        & U32'Image (Total_Received) & " received,"
+                        & U32'Image (Octets_Sent) & " octets out,"
+                        & U32'Image (Octets_Received) & " octets in,"
+                        & U32'Image (Broadcast) & " broadcast,"
+                        & U32'Image (CRC_Errors) & " CRC errors,"
+                        & U32'Image (Missed) & " missed");
+                     Harness.Check
+                       (Total_Sent >= 2,
+                        "the total counter saw both frames, the one that"
+                        & " left and the one that looped back");
+                     Harness.Check
+                       (Octets_Sent > 0 and then Octets_Received > 0,
+                        "the octet counters moved in both directions");
+                     Harness.Check_Equal
+                       (CRC_Errors, 0,
+                        "no frame arrived with a bad checksum");
+                  end;
                end;
             end;
 

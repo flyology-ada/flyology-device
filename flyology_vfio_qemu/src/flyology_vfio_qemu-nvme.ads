@@ -342,6 +342,18 @@ package Flyology_VFIO_QEMU.NVMe is
    --  I/O opcode: check that blocks can be read, without transferring them.
    Opcode_Verify : constant IO_Opcode := 16#0C#;
 
+   --  Admin opcode: give up on a command already submitted.
+   Opcode_Abort : constant Admin_Opcode := 16#08#;
+
+   --  I/O opcode: mark blocks as holding data that cannot be recovered, so
+   --  that reading them fails. The only way to make a read fail on demand,
+   --  and therefore the only way to test that a driver notices.
+   Opcode_Write_Uncorrectable : constant IO_Opcode := 16#04#;
+
+   --  I/O opcode: tell the controller what a range of blocks is for, or
+   --  that it is no longer needed.
+   Opcode_Dataset_Management : constant IO_Opcode := 16#09#;
+
    --  An opcode no command set defines, for checking that a controller
    --  refuses what it does not implement rather than ignoring it.
    Opcode_Undefined : constant Admin_Opcode := 16#FE#;
@@ -652,6 +664,57 @@ package Flyology_VFIO_QEMU.NVMe is
       First_Block : U64;
       Blocks      : Positive)
      with Pre => Submission.Kind = Namespace_IO;
+
+   --  Writes a command asking the controller to abandon another.
+   --
+   --  @param Submission Where the admin submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier This command's own identifier
+   --  @param Target_Queue Which submission queue holds the command
+   --  @param Target_Identifier The identifier of the command to abandon
+   procedure Write_Abort_Command
+     (Submission        : Queue_Location;
+      Slot              : Natural;
+      Identifier        : U16;
+      Target_Queue      : Queue_Identifier;
+      Target_Identifier : U16)
+     with Pre => Submission.Kind = Admin;
+
+   --  Writes a command telling the controller a range of blocks is no
+   --  longer needed.
+   --
+   --  The range list is a structure in memory rather than fields in the
+   --  command, because one command may name many ranges.
+   --
+   --  @param Submission Where the namespace submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Namespace Which namespace
+   --  @param Ranges How many ranges the list holds
+   --  @param List_Address Where the list lives, as a device address
+   procedure Write_Deallocate_Command
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Namespace    : Namespace_Identifier;
+      Ranges       : Positive;
+      List_Address : U64)
+     with Pre => Submission.Kind = Namespace_IO and then Ranges <= 256;
+
+   --  Fills in one entry of a deallocation range list.
+   --
+   --  Each entry is sixteen bytes: a context word, a block count, and the
+   --  first block, in that order and all little-endian.
+   --
+   --  @param List Where the list lives
+   --  @param Index Which entry, from zero
+   --  @param First_Block The first block of the range
+   --  @param Blocks How many blocks the range covers
+   procedure Write_Deallocate_Range
+     (List        : System.Address;
+      Index       : Natural;
+      First_Block : U64;
+      Blocks      : Positive);
 
    --  The command-specific result the controller returned.
    --

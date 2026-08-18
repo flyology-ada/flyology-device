@@ -1044,6 +1044,82 @@ begin
                            end;
                         end;
 
+                        --  Making a read fail on purpose. Marking blocks
+                        --  unrecoverable is the only way to produce a read
+                        --  error on demand, and therefore the only way to
+                        --  check that a driver would notice one. Done at a
+                        --  block nothing else in this test uses, and
+                        --  undone afterwards.
+                        declare
+                           Spoiled : constant U64 :=
+                             U64 (Blocks_Per_Buffer) * 16;
+                        begin
+                           Controller.Write_Block_Range_Command
+                             (IO_Submission, IO_Slot, Next_ID,
+                              Controller.Opcode_Write_Uncorrectable, 1,
+                              Spoiled, 1);
+                           if Run_IO.Status = 0 then
+                              Next_ID := Next_ID + 1;
+
+                              Controller.Write_Block_Command
+                                (IO_Submission, IO_Slot, Next_ID,
+                                 Controller.Opcode_Read, 1, Spoiled, 1,
+                                 Read_Buffer_Device);
+                              declare
+                                 Answer : constant Controller.Completion :=
+                                   Run_IO;
+                              begin
+                                 Harness.Check
+                                   (Answer.Status /= 0,
+                                    "reading a block marked unrecoverable"
+                                    & " fails with status 0x"
+                                    & Hex_16 (Answer.Status)
+                                    & ", which is the only read error a"
+                                    & " driver can be shown on purpose");
+                              end;
+                              Next_ID := Next_ID + 1;
+
+                              --  Writing it again makes it readable, so
+                              --  the namespace is left as it was found.
+                              Controller.Write_Block_Command
+                                (IO_Submission, IO_Slot, Next_ID,
+                                 Controller.Opcode_Write, 1, Spoiled, 1,
+                                 Write_Buffer_Device);
+                              Harness.Check_Equal
+                                (U32 (Run_IO.Status), 0,
+                                 "and writing it again makes it readable");
+                              Next_ID := Next_ID + 1;
+                           else
+                              Harness.Skip
+                                ("the unrecoverable-block path",
+                                 "this controller does not implement it");
+                              Next_ID := Next_ID + 1;
+                           end if;
+                        end;
+
+                        --  Telling the controller a range is no longer
+                        --  needed. The range list is a structure in memory
+                        --  rather than fields in the command, which makes
+                        --  this the one namespace command whose parameters
+                        --  the controller fetches by DMA.
+                        declare
+                           List_Host : constant System.Address :=
+                             Host + SSE.Storage_Offset (Pointer_List_Offset);
+                        begin
+                           Controller.Write_Deallocate_Range
+                             (List_Host, 0,
+                              First_Block => U64 (Blocks_Per_Buffer) * 8,
+                              Blocks      => Blocks_Per_Buffer);
+                           Controller.Write_Deallocate_Command
+                             (IO_Submission, IO_Slot, Next_ID, 1, 1,
+                              Pointer_List_Device);
+                           Harness.Check_Equal
+                             (U32 (Run_IO.Status), 0,
+                              "deallocating a range succeeds, with the"
+                              & " range list itself fetched by DMA");
+                           Next_ID := Next_ID + 1;
+                        end;
+
                         --  And a command that must fail. A read past the
                         --  end of the namespace has to be refused with a
                         --  status, not accepted or ignored.
@@ -1063,6 +1139,25 @@ begin
                         end;
                         Next_ID := Next_ID + 1;
                      end;
+
+                     --  Abandoning a command. Nothing here is slow enough
+                     --  to still be running when the abort arrives, so the
+                     --  controller reports that it found nothing to
+                     --  abandon — which is the correct answer and still
+                     --  exercises the command.
+                     Controller.Write_Abort_Command
+                       (Submission, Admin_Slot, Next_ID,
+                        Target_Queue => 1, Target_Identifier => 16#DEAD#);
+                     Harness.Check_Equal
+                       (U32 (Run_Admin.Status), 0,
+                        "an abort for a command that has already finished"
+                        & " is answered rather than refused");
+                     Harness.Check
+                       ((Controller.Completion_Result (Completion, Last_Admin)
+                         and 1) = 1,
+                        "and it reports that the command was not aborted,"
+                        & " because it had already completed");
+                     Next_ID := Next_ID + 1;
 
                      ------------------------------------------------------
                      --  Take the queues down again

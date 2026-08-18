@@ -468,6 +468,67 @@ package body Flyology_VFIO_QEMU.NVMe is
          CDW12 => U32 (Blocks - 1));
    end Write_Block_Range_Command;
 
+   ----------------------------
+   -- Write_Abort_Command --
+   ----------------------------
+
+   procedure Write_Abort_Command
+     (Submission        : Queue_Location;
+      Slot              : Natural;
+      Identifier        : U16;
+      Target_Queue      : Queue_Identifier;
+      Target_Identifier : U16)
+   is
+   begin
+      Write_Admin_Command
+        (Submission, Slot, Opcode_Abort, Identifier,
+         CDW10 => U32 (Target_Queue)
+                  or Interfaces.Shift_Left (U32 (Target_Identifier), 16));
+   end Write_Abort_Command;
+
+   ---------------------------------
+   -- Write_Deallocate_Command --
+   ---------------------------------
+
+   procedure Write_Deallocate_Command
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Namespace    : Namespace_Identifier;
+      Ranges       : Positive;
+      List_Address : U64)
+   is
+   begin
+      --  Bit two of the eleventh word is what makes this a deallocation
+      --  rather than a hint about access patterns. The range count is held
+      --  one less than the real number, as everything else here is.
+      Write_IO_Command
+        (Submission, Slot, Opcode_Dataset_Management, Identifier,
+         Namespace => Namespace,
+         DPTR1 => List_Address,
+         CDW10 => U32 (Ranges - 1),
+         CDW11 => 4);
+   end Write_Deallocate_Command;
+
+   -------------------------------
+   -- Write_Deallocate_Range --
+   -------------------------------
+
+   procedure Write_Deallocate_Range
+     (List        : System.Address;
+      Index       : Natural;
+      First_Block : U64;
+      Blocks      : Positive)
+   is
+      At_Offset : constant Natural := Index * 16;
+      Blank : Byte_Array (0 .. 15) with Import,
+        Address => List + SSE.Storage_Offset (At_Offset);
+   begin
+      Blank := (others => 0);
+      Put_32 (List, At_Offset + 4, U32 (Blocks));
+      Put_64 (List, At_Offset + 8, First_Block);
+   end Write_Deallocate_Range;
+
    ---------------------------
    -- Completion_Result --
    ---------------------------

@@ -77,6 +77,11 @@ package Flyology_VFIO_QEMU.E1000E is
    --  Interrupt cause, read to find out why the device interrupted.
    Interrupt_Cause_Register : constant := 16#000C0#;
 
+   --  Interrupt cause set, written to provoke a cause. It exists so that a
+   --  driver can test its own interrupt path without waiting for the
+   --  device to have a reason.
+   Interrupt_Cause_Set_Register : constant := 16#000C8#;
+
    --  Interrupt mask set, written to ask for interrupts.
    Interrupt_Mask_Set_Register : constant := 16#000D0#;
 
@@ -117,6 +122,18 @@ package Flyology_VFIO_QEMU.E1000E is
    --  read-modify-written.
    Good_Packets_Received_Register    : constant := 16#04074#;
    Good_Packets_Transmitted_Register : constant := 16#04080#;
+
+   --  Set in the receive control register to route transmitted frames
+   --  straight back into the receive path, without them leaving the
+   --  device. It makes both directions testable with nothing attached.
+   Receive_Loopback : constant U32 := 3 * 2 ** 6;
+
+   --  Interrupt causes worth naming. Every one is cleared by reading the
+   --  cause register, which is the classic register that must never be
+   --  read-modify-written: the read is the acknowledgement.
+   Interrupt_Transmit_Done : constant U32 := 2 ** 0;
+   Interrupt_Link_Change   : constant U32 := 2 ** 2;
+   Interrupt_Receive_Timer : constant U32 := 2 ** 7;
 
    --  Set in the receive control register to enable receiving.
    Receive_Enable : constant U32 := 2 ** 1;

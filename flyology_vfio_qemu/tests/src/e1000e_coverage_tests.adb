@@ -86,7 +86,7 @@ procedure E1000E_Coverage_Tests is
       Described (16#000C8#, "Interrupt Cause Set", True),
       Described (16#000D0#, "Interrupt Mask Set", True),
       Described (16#000D8#, "Interrupt Mask Clear", True),
-      Described (16#000E4#, "Interrupt Throttling"),
+      Described (16#000E4#, "Interrupt Throttling", True),
       Described (16#00100#, "Receive Control", True),
       Described (16#00400#, "Transmit Control", True),
       Described (16#00410#, "Transmit Gap", True),
@@ -102,15 +102,15 @@ procedure E1000E_Coverage_Tests is
       Described (16#03810#, "Transmit Ring Head", True),
       Described (16#03818#, "Transmit Ring Tail", True),
       Described (16#03820#, "Transmit Delay Timer"),
-      Described (16#04000#, "CRC Error Count"),
+      Described (16#04000#, "CRC Error Count", True),
       Described (16#04074#, "Good Packets Received", True),
       Described (16#04080#, "Good Packets Sent", True),
       Described (16#040D0#, "Total Packets Received", True),
       Described (16#040D4#, "Total Packets Sent", True),
-      Described (16#040C0#, "Total Octets Received"),
-      Described (16#040C8#, "Total Octets Sent"),
-      Described (16#04010#, "Missed Packet Count"),
-      Described (16#04030#, "Broadcast Received"),
+      Described (16#040C0#, "Total Octets Received", True),
+      Described (16#040C8#, "Total Octets Sent", True),
+      Described (16#04010#, "Missed Packet Count", True),
+      Described (16#04030#, "Broadcast Received", True),
       Described (16#05000#, "Multicast Table Array"),
       Described (16#05038#, "VLAN Ethertype"),
       Described (16#05400#, "Receive Address Low", True),
@@ -130,7 +130,7 @@ procedure E1000E_Coverage_Tests is
       else "52:54:00:12:34:56");
 
    --  What the functional suite reached when this floor was last reviewed.
-   Coverage_Floor : constant := 22;
+   Coverage_Floor : constant := 33;
 begin
    declare
       Where : constant String := Find (NIC.Vendor_ID, NIC.Device_ID);
