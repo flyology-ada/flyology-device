@@ -1,0 +1,31 @@
+name = "flyology_vfio"
+description = "Linux VFIO userspace device access: BARs, MMIO, IOMMU mapping, interrupts"
+version = "0.1.0-dev"
+licenses = "MIT OR Apache-2.0"
+authors = ["Yurii Rashkovskii"]
+maintainers = ["Yurii Rashkovskii <yrashk@gmail.com>"]
+maintainers-logins = ["yrashk"]
+website = "https://flyology.org/"
+project-files = ["flyology_vfio.gpr"]
+tags = ["ada", "vfio", "pci", "iommu", "mmio", "driver"]
+
+[[depends-on]]
+flyology_dma = "~0.1.0-dev"
+
+[[pins]]
+flyology_dma = { path = "../flyology_dma" }
+
+[build-switches]
+"*".ada_version = "Ada2022"
+development.optimization = "Debug"
+development.compile_checks = "Errors"
+release.optimization = "Performance"
+release.compile_checks = "Warnings"
+
+[[actions]]
+type = "test"
+command = ["./scripts/test.sh"]
+
+[gpr-set-externals.'case(os)']
+linux = { FLYOLOGY_VFIO_PLATFORM = "linux" }
+macos = { FLYOLOGY_VFIO_PLATFORM = "darwin" }

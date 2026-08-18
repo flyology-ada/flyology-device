@@ -1,0 +1,14 @@
+name = "flyology_vfio_tests"
+description = "Test programs for flyology_vfio"
+version = "0.1.0-dev"
+licenses = "MIT OR Apache-2.0"
+authors = ["Yurii Rashkovskii"]
+maintainers = ["Yurii Rashkovskii <yrashk@gmail.com>"]
+maintainers-logins = ["yrashk"]
+executables = ["thin_tests", "lifecycle_tests"]
+
+[[depends-on]]
+flyology_vfio = "*"
+
+[[pins]]
+flyology_vfio = { path = ".." }

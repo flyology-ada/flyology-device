@@ -1,0 +1,14 @@
+name = "flyology_vfio_showcases"
+description = "Maintained examples for flyology_vfio"
+version = "0.1.0-dev"
+licenses = "MIT OR Apache-2.0"
+authors = ["Yurii Rashkovskii"]
+maintainers = ["Yurii Rashkovskii <yrashk@gmail.com>"]
+maintainers-logins = ["yrashk"]
+executables = ["bring_up", "host_readiness"]
+
+[[depends-on]]
+flyology_vfio = "*"
+
+[[pins]]
+flyology_vfio = { path = ".." }

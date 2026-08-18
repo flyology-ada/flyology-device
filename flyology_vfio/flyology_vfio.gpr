@@ -1,0 +1,44 @@
+with "../flyology_dma/flyology_dma.gpr";
+
+project Flyology_VFIO is
+
+   type Build_Mode_Kind is ("checked", "release");
+   Build_Mode : Build_Mode_Kind :=
+     external ("FLYOLOGY_VFIO_BUILD_MODE", "checked");
+
+   --  VFIO is Linux-only, and so is eventfd. Darwin gets a body that says
+   --  so rather than a link that fails on an undefined symbol, which is
+   --  what keeps macOS usable as a development host for everything in this
+   --  crate that does not need a device.
+   type Platform_Kind is ("linux", "darwin");
+   Platform : Platform_Kind := external ("FLYOLOGY_VFIO_PLATFORM", "linux");
+
+   for Languages use ("Ada");
+   for Source_Dirs use ("src", "src/" & Platform);
+   for Object_Dir use "obj";
+   for Library_Name use "flyology_vfio";
+   for Library_Dir use "lib";
+   for Library_Kind use "static";
+   for Create_Missing_Dirs use "True";
+
+   package Compiler is
+      Common :=
+        ("-gnat2022", "-gnatwa", "-gnatwJ", "-fstack-check",
+         "-fno-strict-aliasing");
+
+      case Build_Mode is
+         when "checked" =>
+            --  The preconditions carry the VFIO lifecycle ordering and the
+            --  register bounds and alignment rules, which are the checks
+            --  worth having on while anything is being brought up.
+            for Default_Switches ("Ada") use Common & ("-O1", "-gnata");
+         when "release" =>
+            for Default_Switches ("Ada") use Common & ("-O2");
+      end case;
+   end Compiler;
+
+   package Documentation is
+      for Output_Dir ("html") use "docs/api";
+   end Documentation;
+
+end Flyology_VFIO;
