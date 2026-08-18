@@ -139,12 +139,70 @@ package Flyology_VFIO_QEMU.NVMe is
    --  How large the Identify data structure is.
    Identify_Bytes : constant := 4096;
 
+   ---------------------------------------------------------------------
+   --  Opcodes, and why they are two types rather than one
+   ---------------------------------------------------------------------
+
+   --  The same opcode number means different things depending on which
+   --  queue it is sent to, and the numbers that collide are the ones a
+   --  driver uses constantly. Zero is Delete I/O Submission Queue on the
+   --  admin queue and Flush on a namespace queue. One is Create I/O
+   --  Submission Queue, or Write. Two is Get Log Page, or Read.
+   --
+   --  Nothing in the number distinguishes them, so sending a namespace
+   --  opcode to the admin queue is a command that runs and does something
+   --  else entirely. The two are therefore distinct types, and the queue
+   --  each may be sent to is fixed by the queue's own kind, so the
+   --  compiler refuses the mistake rather than the controller obeying it.
+   --
+   --  This is the same argument, and the same remedy, as the distinct
+   --  descriptor types in Flyology_VFIO: several VFIO request numbers mean
+   --  one thing on a container and another on a device.
+
+   --  A command sent to the admin queue.
+   type Admin_Opcode is new U8;
+
+   --  A command sent to a namespace queue.
+   type IO_Opcode is new U8;
+
+   --  Which feature a Get or Set Features command names.
+   type Feature_Identifier is new U8;
+
+   --  Which log a Get Log Page command names.
+   type Log_Identifier is new U8;
+
+   --  Which namespace a command applies to.
+   type Namespace_Identifier is new U32;
+
+   --  Every namespace at once, where a command allows it.
+   All_Namespaces : constant Namespace_Identifier := 16#FFFF_FFFF#;
+
+   --  No namespace, which is what a controller-scope command takes.
+   No_Namespace : constant Namespace_Identifier := 0;
+
+   --  Which queue pair. Zero is the admin pair, which exists from the
+   --  moment the controller is enabled and is never created or deleted.
+   type Queue_Identifier is new Natural range 0 .. 65_535;
+
+   --  The admin queue pair.
+   Admin_Queue : constant Queue_Identifier := 0;
+
+   --  What a queue is for.
+   --  @enum Admin The pair the controller is configured through
+   --  @enum Namespace_IO A pair that carries reads and writes
+   type Queue_Kind is (Admin, Namespace_IO);
+
    --  Where a queue lives, as both addresses of the same bytes.
    --
+   --  The kind is a discriminant rather than a field so that it cannot be
+   --  changed after the queue is built, and so that the commands below can
+   --  require the right one.
+   --
+   --  @field Kind Whether this is the admin pair or a namespace pair
    --  @field Host Where this process writes the entries
    --  @field Device The address the controller is given
    --  @field Entries How many entries the queue holds
-   type Queue_Location is record
+   type Queue_Location (Kind : Queue_Kind := Admin) is record
       Host    : System.Address;
       Device  : U64;
       Entries : Positive;
@@ -204,38 +262,143 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @param CDW10 Command word ten
    --  @param CDW11 Command word eleven
    --  @param CDW12 Command word twelve
-   procedure Write_Command
+   procedure Write_Admin_Command
      (Submission : Queue_Location;
       Slot       : Natural;
-      Opcode     : U8;
+      Opcode     : Admin_Opcode;
       Identifier : U16;
-      Namespace  : U32 := 0;
+      Namespace  : Namespace_Identifier := No_Namespace;
       DPTR1      : U64 := 0;
       DPTR2      : U64 := 0;
       CDW10      : U32 := 0;
       CDW11      : U32 := 0;
-      CDW12      : U32 := 0);
+      CDW12      : U32 := 0)
+     with Pre => Submission.Kind = Admin;
+
+   --  The same, for a command sent to a namespace queue.
+   --
+   --  @param Submission Where the namespace submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Opcode Which command
+   --  @param Identifier The command identifier
+   --  @param Namespace Which namespace
+   --  @param DPTR1 First data pointer, a device address
+   --  @param DPTR2 Second data pointer, a device address
+   --  @param CDW10 Command word ten
+   --  @param CDW11 Command word eleven
+   --  @param CDW12 Command word twelve
+   procedure Write_IO_Command
+     (Submission : Queue_Location;
+      Slot       : Natural;
+      Opcode     : IO_Opcode;
+      Identifier : U16;
+      Namespace  : Namespace_Identifier;
+      DPTR1      : U64 := 0;
+      DPTR2      : U64 := 0;
+      CDW10      : U32 := 0;
+      CDW11      : U32 := 0;
+      CDW12      : U32 := 0)
+     with Pre => Submission.Kind = Namespace_IO;
 
    --  Admin opcode: describe the controller or a namespace.
-   Opcode_Identify : constant U8 := 16#06#;
+   Opcode_Identify : constant Admin_Opcode := 16#06#;
 
    --  Admin opcode: create an I/O submission queue.
-   Opcode_Create_Submission_Queue : constant U8 := 16#01#;
+   Opcode_Create_Submission_Queue : constant Admin_Opcode := 16#01#;
 
    --  Admin opcode: create an I/O completion queue.
-   Opcode_Create_Completion_Queue : constant U8 := 16#05#;
+   Opcode_Create_Completion_Queue : constant Admin_Opcode := 16#05#;
 
    --  Admin opcode: remove an I/O submission queue.
-   Opcode_Delete_Submission_Queue : constant U8 := 16#00#;
+   Opcode_Delete_Submission_Queue : constant Admin_Opcode := 16#00#;
 
    --  Admin opcode: remove an I/O completion queue.
-   Opcode_Delete_Completion_Queue : constant U8 := 16#04#;
+   Opcode_Delete_Completion_Queue : constant Admin_Opcode := 16#04#;
 
    --  I/O opcode: write blocks.
-   Opcode_Write : constant U8 := 16#01#;
+   Opcode_Write : constant IO_Opcode := 16#01#;
 
    --  I/O opcode: read blocks.
-   Opcode_Read : constant U8 := 16#02#;
+   Opcode_Read : constant IO_Opcode := 16#02#;
+
+   --  Admin opcode: report a feature's current value.
+   Opcode_Get_Features : constant Admin_Opcode := 16#0A#;
+
+   --  Admin opcode: change a feature.
+   Opcode_Set_Features : constant Admin_Opcode := 16#09#;
+
+   --  Admin opcode: read one of the controller's logs.
+   Opcode_Get_Log_Page : constant Admin_Opcode := 16#02#;
+
+   --  I/O opcode: commit written data to stable storage.
+   Opcode_Flush : constant IO_Opcode := 16#00#;
+
+   --  I/O opcode: write zeroes without transferring them.
+   Opcode_Write_Zeroes : constant IO_Opcode := 16#08#;
+
+   --  I/O opcode: compare stored data against a buffer.
+   Opcode_Compare : constant IO_Opcode := 16#05#;
+
+   --  I/O opcode: check that blocks can be read, without transferring them.
+   Opcode_Verify : constant IO_Opcode := 16#0C#;
+
+   --  An opcode no command set defines, for checking that a controller
+   --  refuses what it does not implement rather than ignoring it.
+   Opcode_Undefined : constant Admin_Opcode := 16#FE#;
+
+   --  Feature: how many I/O queues the controller will allow.
+   --
+   --  A real driver asks for this before creating any, because the answer
+   --  can be fewer than it asked for and creating more than were granted
+   --  fails one queue at a time.
+   Feature_Number_Of_Queues : constant Feature_Identifier := 16#07#;
+
+   --  Feature: whether the controller has a volatile write cache, which
+   --  decides whether Flush means anything.
+   Feature_Volatile_Write_Cache : constant Feature_Identifier := 16#06#;
+
+   --  Feature: how long the controller retries before giving up.
+   Feature_Error_Recovery : constant Feature_Identifier := 16#05#;
+
+   --  Feature: how the controller batches completions before interrupting.
+   Feature_Interrupt_Coalescing : constant Feature_Identifier := 16#08#;
+
+   --  Feature: how the controller arbitrates between submission queues.
+   Feature_Arbitration : constant Feature_Identifier := 16#00#;
+
+   --  Feature: the controller's power state.
+   Feature_Power_Management : constant Feature_Identifier := 16#01#;
+
+   --  Feature: which asynchronous events the controller may report.
+   Feature_Async_Event_Configuration : constant Feature_Identifier := 16#0B#;
+
+   --  A feature identifier outside anything defined, for checking refusal.
+   Feature_Undefined : constant Feature_Identifier := 16#7E#;
+
+   --  Log: the errors the controller has recorded.
+   Log_Error_Information : constant Log_Identifier := 16#01#;
+
+   --  Log: the controller's health, including how much has been read and
+   --  written through it.
+   Log_Health_Information : constant Log_Identifier := 16#02#;
+
+   --  Log: which firmware is in which slot.
+   Log_Firmware_Slot : constant Log_Identifier := 16#03#;
+
+   --  Which structure Identify should return: the namespaces that exist.
+   Identify_Active_Namespaces : constant U32 := 2;
+
+   --  Which structure Identify should return: how each namespace is named.
+   Identify_Namespace_Descriptors : constant U32 := 3;
+
+   --  Set in the configuration register to ask for an orderly shutdown.
+   Configuration_Shutdown_Normal : constant U32 := 2 ** 14;
+
+   --  What the status register reports about a shutdown in its third and
+   --  fourth bits: zero for none in progress, one for occurring, two for
+   --  complete.
+   function Shutdown_State (Status : U32) return Natural
+     is (Natural (Interfaces.Shift_Right (Status, 2) and 3));
 
    --  Which structure Identify should return: the controller itself.
    Identify_Controller : constant U32 := 1;
@@ -268,7 +431,7 @@ package Flyology_VFIO_QEMU.NVMe is
    procedure Ring_Submission_Doorbell
      (BAR    : Regions.Window;
       Stride : Positive;
-      Queue  : Natural;
+      Queue  : Queue_Identifier;
       Tail   : Natural);
 
    --  Tells the controller that a completion has been consumed.
@@ -279,7 +442,7 @@ package Flyology_VFIO_QEMU.NVMe is
    procedure Ring_Completion_Doorbell
      (BAR    : Regions.Window;
       Stride : Positive;
-      Queue  : Natural;
+      Queue  : Queue_Identifier;
       Head   : Natural);
 
    --  What the controller reported about one command.
@@ -330,8 +493,9 @@ package Flyology_VFIO_QEMU.NVMe is
      (Submission     : Queue_Location;
       Slot           : Natural;
       Identifier     : U16;
-      Namespace      : U32;
-      Result_Address : U64);
+      Namespace      : Namespace_Identifier;
+      Result_Address : U64)
+     with Pre => Submission.Kind = Admin;
 
    --  Writes a command creating an I/O completion queue.
    --
@@ -349,9 +513,11 @@ package Flyology_VFIO_QEMU.NVMe is
      (Submission   : Queue_Location;
       Slot         : Natural;
       Identifier   : U16;
-      Queue_Number : Positive;
+      Queue_Number : Queue_Identifier;
       Entries      : Positive;
-      Address      : U64);
+      Address      : U64)
+     with Pre => Submission.Kind = Admin
+                 and then Queue_Number /= Admin_Queue;
 
    --  Writes a command creating an I/O submission queue.
    --  @param Submission Where the admin submission queue lives
@@ -365,10 +531,13 @@ package Flyology_VFIO_QEMU.NVMe is
      (Submission       : Queue_Location;
       Slot             : Natural;
       Identifier       : U16;
-      Queue_Number     : Positive;
-      Completion_Number : Positive;
-      Entries          : Positive;
-      Address          : U64);
+      Queue_Number      : Queue_Identifier;
+      Completion_Number : Queue_Identifier;
+      Entries           : Positive;
+      Address           : U64)
+     with Pre => Submission.Kind = Admin
+                 and then Queue_Number /= Admin_Queue
+                 and then Completion_Number /= Admin_Queue;
 
    --  Writes a command removing a queue.
    --  @param Submission Where the admin submission queue lives
@@ -380,8 +549,10 @@ package Flyology_VFIO_QEMU.NVMe is
      (Submission   : Queue_Location;
       Slot         : Natural;
       Identifier   : U16;
-      Opcode       : U8;
-      Queue_Number : Positive);
+      Opcode       : Admin_Opcode;
+      Queue_Number : Queue_Identifier)
+     with Pre => Submission.Kind = Admin
+                 and then Queue_Number /= Admin_Queue;
 
    --  Writes a command reading or writing blocks.
    --
@@ -401,11 +572,97 @@ package Flyology_VFIO_QEMU.NVMe is
      (Submission  : Queue_Location;
       Slot        : Natural;
       Identifier  : U16;
-      Opcode      : U8;
-      Namespace   : U32;
+      Opcode      : IO_Opcode;
+      Namespace   : Namespace_Identifier;
       First_Block : U64;
       Blocks      : Positive;
-      Address     : U64);
+      Address     : U64)
+     with Pre => Submission.Kind = Namespace_IO;
+
+   --  Writes a command reading or changing a feature.
+   --
+   --  @param Submission Where the admin submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Opcode Get or set
+   --  @param Feature Which feature
+   --  @param Value The value to set, ignored when getting
+   --  @param Namespace Which namespace, where the feature is per-namespace
+   procedure Write_Feature_Command
+     (Submission : Queue_Location;
+      Slot       : Natural;
+      Identifier : U16;
+      Opcode     : Admin_Opcode;
+      Feature    : Feature_Identifier;
+      Value      : U32 := 0;
+      Namespace  : Namespace_Identifier := No_Namespace)
+     with Pre => Submission.Kind = Admin;
+
+   --  Writes a command reading one of the controller's logs.
+   --
+   --  The length is given in dwords minus one, which is the specification's
+   --  convention and a reliable source of transfers one word short.
+   --
+   --  @param Submission Where the admin submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Log Which log
+   --  @param Bytes How many bytes to read; a multiple of four
+   --  @param Result_Address Where to deliver the log
+   --  @param Namespace Which namespace, or all ones for the controller
+   procedure Write_Log_Page_Command
+     (Submission     : Queue_Location;
+      Slot           : Natural;
+      Identifier     : U16;
+      Log            : Log_Identifier;
+      Bytes          : Positive;
+      Result_Address : U64;
+      Namespace      : Namespace_Identifier := All_Namespaces)
+     with Pre => Submission.Kind = Admin;
+
+   --  Writes a command with no data transfer, such as Flush.
+   --  @param Submission Where the submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Opcode Which command
+   --  @param Namespace Which namespace
+   procedure Write_Simple_Command
+     (Submission : Queue_Location;
+      Slot       : Natural;
+      Identifier : U16;
+      Opcode     : IO_Opcode;
+      Namespace  : Namespace_Identifier)
+     with Pre => Submission.Kind = Namespace_IO;
+
+   --  Writes a command affecting blocks without transferring data, such as
+   --  Write Zeroes or Verify.
+   --  @param Submission Where the submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Opcode Which command
+   --  @param Namespace Which namespace
+   --  @param First_Block The first logical block
+   --  @param Blocks How many blocks, counted from one
+   procedure Write_Block_Range_Command
+     (Submission  : Queue_Location;
+      Slot        : Natural;
+      Identifier  : U16;
+      Opcode      : IO_Opcode;
+      Namespace   : Namespace_Identifier;
+      First_Block : U64;
+      Blocks      : Positive)
+     with Pre => Submission.Kind = Namespace_IO;
+
+   --  The command-specific result the controller returned.
+   --
+   --  Get Features answers here rather than in a buffer, which is why the
+   --  completion carries a value at all.
+   --
+   --  @param Queue Where the completion queue lives
+   --  @param Slot Which entry to read
+   --  @return The first word of the completion
+   function Completion_Result
+     (Queue : Queue_Location; Slot : Natural) return U32;
 
    ---------------------------------------------------------------------
    --  The Identify Controller structure

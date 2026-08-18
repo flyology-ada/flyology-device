@@ -67,6 +67,74 @@ then read to confirm it agrees one frame went each way — and read again to
 confirm they clear on reading, which is why such a register must never be
 read-modify-written.
 
+## Measuring coverage instead of claiming it
+
+Deciding what to test by reading a device's source has an obvious failure
+mode: the reading is done once, by hand, against whatever version was
+current, and nothing notices when it stops being true. Two programs ask the
+devices instead.
+
+`nvme_coverage_tests` issues every opcode, feature identifier and log
+identifier in turn and reports what came back. It can tell an unimplemented
+command from an implemented one because the two produce different status
+codes — Invalid Command Opcode means absent, anything else means present
+and unhappy with its arguments. `e1000e_coverage_tests` does the equivalent
+for the register window, the physical-layer chip behind it, and the
+non-volatile configuration memory.
+
+Both then compare that measured surface against the list of things the
+functional tests drive, and **fail if coverage falls below a recorded
+floor**. That is what makes them tests rather than documents: coverage that
+decays silently is the thing being guarded against.
+
+What they currently report:
+
+| Surface | Implemented | Exercised |
+| --- | --- | --- |
+| NVMe admin commands | 13 of 25 probed (7 more deliberately not probed) | 8 |
+| NVMe namespace commands | 15 of 15 probed | 6 |
+| NVMe features | 12 of 32 answer without a namespace | 3 driven, 2 round-tripped |
+| NVMe logs | 5 of 16 | 3 |
+| e1000e registers | 42 of 42 probed answer | 28 |
+| e1000e physical-layer registers | 23 of 32 | 3 |
+
+## What the emulated devices do not implement
+
+The probes exist to find this out, and what they found is worth writing
+down. All of it is about QEMU, not about the specifications.
+
+**The NVMe controller has no** Namespace Management, Device Self-test, Keep
+Alive, Virtualization Management or Get LBA Status. It does implement
+Namespace Attachment, Directive Send and Receive, Doorbell Buffer Config and
+Abort, none of which the functional tests drive yet.
+
+**It reports every namespace opcode as implemented**, including Zone Append
+and the zone management commands, on a namespace that is not zoned. That is
+a property of how the command-set table is built rather than a claim the
+commands would work, and it is why the probe counts what is *present* rather
+than what would *succeed*.
+
+**Arbitration is refused.** Feature `0x00` appears in QEMU's own support
+table and is nonetheless answered with Invalid Field in Command. Features
+answered are `0x01`, `0x02`, `0x04`, `0x06` through `0x0B`, `0x0E`, `0x16`
+and `0x19`.
+
+**Error Recovery needs a namespace and the others must not have one.** A
+controller-scope feature named with a namespace identifier is refused, and a
+per-namespace feature without one likewise. Both refusals are correct and
+both are easy to read as the controller being wrong.
+
+**The e1000e answers every register probed**, which makes "does it answer"
+a weak signal on this device: QEMU marks a number of them internally as
+partial implementations that store a written value and give it back.
+Its source records timestamp processing, SNAP, and iSCSI and NFS filtering
+as unimplemented.
+
+**It supports internal loopback** through the receive control register,
+which would make a frame test independent of any network backend. The
+current frame test uses the real backend instead, because an exchange with
+something outside the guest is the stronger evidence.
+
 ## Corpora chosen outside the program
 
 Some checks compare against values this program cannot have invented, which
@@ -148,9 +216,10 @@ error anywhere. `flyology_vfio` had no unmask operation at all; it now has
 
 ## Status
 
-All five suites pass in the repository's virtual machine against an
+All seven suites pass in the repository's virtual machine against an
 emulated SMMUv3: `edu_tests` at 29 checks, `container_sharing_tests` at 18,
-`pci_testdev_tests` at 10, `nvme_tests` at 37, and `e1000e_tests` at 30.
+`pci_testdev_tests` at 10, `nvme_tests` at 64, `e1000e_tests` at 30,
+`nvme_coverage_tests` at 11 and `e1000e_coverage_tests` at 7.
 
 ## Licence
 

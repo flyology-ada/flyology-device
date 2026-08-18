@@ -66,6 +66,14 @@ package Flyology_VFIO_QEMU.E1000E is
    --  Set in the high half of a receive address when it holds a real one.
    Receive_Address_Valid : constant U32 := 2 ** 31;
 
+   --  The window onto the physical-layer chip, which is a separate device
+   --  reached through this register rather than through the memory map.
+   MDI_Control_Register : constant := 16#00020#;
+
+   --  The window onto the non-volatile memory holding the device's
+   --  configuration, including the hardware address it powers up with.
+   EEPROM_Read_Register : constant := 16#00014#;
+
    --  Interrupt cause, read to find out why the device interrupted.
    Interrupt_Cause_Register : constant := 16#000C0#;
 
@@ -151,6 +159,56 @@ package Flyology_VFIO_QEMU.E1000E is
 
    --  A hardware address, in the order the bytes appear on the wire.
    type MAC_Address is array (1 .. 6) of U8;
+
+   --  Which register of the physical-layer chip. There are thirty-two in
+   --  the basic set, of which the first two are standardised across every
+   --  such chip ever made and the rest are the vendor's business.
+   type PHY_Register is new Natural range 0 .. 31;
+
+   --  The basic control register, present in every physical-layer chip.
+   PHY_Control : constant PHY_Register := 0;
+
+   --  The basic status register.
+   PHY_Status : constant PHY_Register := 1;
+
+   --  The two halves of the chip's identity.
+   PHY_Identifier_High : constant PHY_Register := 2;
+   PHY_Identifier_Low  : constant PHY_Register := 3;
+
+   --  Reads one register of the physical-layer chip.
+   --
+   --  This is a second device behind the first, reached by writing a
+   --  request and waiting for a ready bit — a small bus inside the register
+   --  window. It is worth exercising because it is the one place where a
+   --  read is not a read: the value arrives in the same register the
+   --  request was written to, and only after the device says so.
+   --
+   --  @param BAR The device's mapped registers
+   --  @param Number Which physical-layer register
+   --  @param Attempts How many times to poll before giving up
+   --  @return The register's contents
+   --  @exception Device_Misbehaved The device never reported the read done
+   function Read_PHY
+     (BAR      : Regions.Window;
+      Number   : PHY_Register;
+      Attempts : Positive := 20_000) return U16;
+
+   --  Whether a physical-layer read reported an error rather than a value.
+   --  @param BAR The device's mapped registers
+   --  @return True when the last read set the error bit
+   function PHY_Read_Failed (BAR : Regions.Window) return Boolean;
+
+   --  Reads one word of the device's non-volatile configuration memory.
+   --
+   --  @param BAR The device's mapped registers
+   --  @param Word Which sixteen-bit word
+   --  @param Attempts How many times to poll before giving up
+   --  @return The word's contents
+   --  @exception Device_Misbehaved The device never reported the read done
+   function Read_EEPROM
+     (BAR      : Regions.Window;
+      Word     : Natural;
+      Attempts : Positive := 20_000) return U16;
 
    --  Where a descriptor ring lives, as both addresses of the same bytes.
    --

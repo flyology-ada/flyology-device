@@ -109,7 +109,8 @@ corpus="FLYOLOGY_DEVICE_VM_MAC=${FLYOLOGY_DEVICE_VM_MAC:-52:54:00:12:34:56}"
 corpus="$corpus FLYOLOGY_DEVICE_VM_NVME_SERIAL=${FLYOLOGY_DEVICE_VM_NVME_SERIAL:-flyology0001}"
 
 for suite in edu_tests container_sharing_tests pci_testdev_tests \
-             nvme_tests e1000e_tests; do
+             nvme_tests e1000e_tests \
+             nvme_coverage_tests e1000e_coverage_tests; do
   printf '\n== %s ==\n' "$suite"
   run_in_guest "$corpus /mnt/share/$suite" || status=1
 done

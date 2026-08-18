@@ -191,6 +191,99 @@ package body Flyology_VFIO_QEMU.E1000E is
       return Result;
    end Value;
 
+   ---------------
+   -- Read_PHY --
+   ---------------
+
+   --  The request names the register, the physical-layer chip's own
+   --  address on that small bus, and the operation; the device clears the
+   --  ready bit while it works and sets it again with the answer in the
+   --  low half of the very same register.
+   PHY_Address_Shift  : constant := 21;
+   PHY_Register_Shift : constant := 16;
+   PHY_Read_Opcode    : constant U32 := 2 * 2 ** 26;
+   PHY_Ready          : constant U32 := 2 ** 28;
+   PHY_Error          : constant U32 := 2 ** 30;
+
+   --  The internal chip is always at address one on that bus.
+   PHY_Internal : constant U32 := 1;
+
+   function Read_PHY
+     (BAR      : Regions.Window;
+      Number   : PHY_Register;
+      Attempts : Positive := 20_000) return U16
+   is
+      Request : constant U32 :=
+        PHY_Read_Opcode
+        or Interfaces.Shift_Left (PHY_Internal, PHY_Address_Shift)
+        or Interfaces.Shift_Left (U32 (Number), PHY_Register_Shift);
+      Polls : Natural := 0;
+      Seen  : U32;
+   begin
+      Reg.Write_Release_32 (BAR, MDI_Control_Register, Request);
+
+      loop
+         Seen := Reg.Read_Acquire_32 (BAR, MDI_Control_Register);
+         exit when (Seen and PHY_Ready) /= 0;
+         Polls := Polls + 1;
+         Wait_Microseconds (100);
+         if Polls >= Attempts then
+            raise Device_Misbehaved with
+              "the device never reported a physical-layer read of register"
+              & PHY_Register'Image (Number) & " as done after"
+              & Natural'Image (Attempts) & " polls";
+         end if;
+      end loop;
+
+      return U16 (Seen and 16#FFFF#);
+   end Read_PHY;
+
+   -----------------------
+   -- PHY_Read_Failed --
+   -----------------------
+
+   function PHY_Read_Failed (BAR : Regions.Window) return Boolean is
+     ((Reg.Read_32 (BAR, MDI_Control_Register) and PHY_Error) /= 0);
+
+   ------------------
+   -- Read_EEPROM --
+   ------------------
+
+   EEPROM_Start        : constant U32 := 2 ** 0;
+   EEPROM_Done         : constant U32 := 2 ** 1;
+   EEPROM_Address_Shift : constant := 2;
+   EEPROM_Data_Shift    : constant := 16;
+
+   function Read_EEPROM
+     (BAR      : Regions.Window;
+      Word     : Natural;
+      Attempts : Positive := 20_000) return U16
+   is
+      Request : constant U32 :=
+        EEPROM_Start
+        or Interfaces.Shift_Left (U32 (Word), EEPROM_Address_Shift);
+      Polls : Natural := 0;
+      Seen  : U32;
+   begin
+      Reg.Write_Release_32 (BAR, EEPROM_Read_Register, Request);
+
+      loop
+         Seen := Reg.Read_Acquire_32 (BAR, EEPROM_Read_Register);
+         exit when (Seen and EEPROM_Done) /= 0;
+         Polls := Polls + 1;
+         Wait_Microseconds (100);
+         if Polls >= Attempts then
+            raise Device_Misbehaved with
+              "the device never reported reading configuration word"
+              & Natural'Image (Word) & " as done after"
+              & Natural'Image (Attempts) & " polls";
+         end if;
+      end loop;
+
+      return U16 (Interfaces.Shift_Right (Seen, EEPROM_Data_Shift)
+                  and 16#FFFF#);
+   end Read_EEPROM;
+
    ----------------------
    -- Start_Receiving --
    ----------------------

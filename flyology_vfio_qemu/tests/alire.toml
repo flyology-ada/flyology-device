@@ -11,6 +11,8 @@ executables = [
   "pci_testdev_tests",
   "nvme_tests",
   "e1000e_tests",
+  "nvme_coverage_tests",
+  "e1000e_coverage_tests",
 ]
 
 [[depends-on]]

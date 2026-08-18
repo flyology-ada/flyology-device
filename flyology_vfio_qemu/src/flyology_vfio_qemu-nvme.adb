@@ -181,17 +181,20 @@ package body Flyology_VFIO_QEMU.NVMe is
    -- Write_Command --
    --------------------
 
-   procedure Write_Command
+   --  Both public forms funnel through this. The opcode arrives already
+   --  narrowed to a byte, because by that point the type system has done
+   --  its work and which queue it belongs to is settled.
+   procedure Write_Raw_Command
      (Submission : Queue_Location;
       Slot       : Natural;
       Opcode     : U8;
       Identifier : U16;
-      Namespace  : U32 := 0;
-      DPTR1      : U64 := 0;
-      DPTR2      : U64 := 0;
-      CDW10      : U32 := 0;
-      CDW11      : U32 := 0;
-      CDW12      : U32 := 0)
+      Namespace  : Namespace_Identifier;
+      DPTR1      : U64;
+      DPTR2      : U64;
+      CDW10      : U32;
+      CDW11      : U32;
+      CDW12      : U32)
    is
       Base     : constant System.Address := Submission.Host;
       Entry_At : constant Natural := Slot * Submission_Entry_Bytes;
@@ -205,13 +208,57 @@ package body Flyology_VFIO_QEMU.NVMe is
 
       Put_32 (Base, Entry_At + 0, U32 (Opcode));
       Put_16 (Base, Entry_At + 2, Identifier);
-      Put_32 (Base, Entry_At + 4, Namespace);
+      Put_32 (Base, Entry_At + 4, U32 (Namespace));
       Put_64 (Base, Entry_At + 24, DPTR1);
       Put_64 (Base, Entry_At + 32, DPTR2);
       Put_32 (Base, Entry_At + 40, CDW10);
       Put_32 (Base, Entry_At + 44, CDW11);
       Put_32 (Base, Entry_At + 48, CDW12);
-   end Write_Command;
+   end Write_Raw_Command;
+
+   ---------------------------
+   -- Write_Admin_Command --
+   ---------------------------
+
+   procedure Write_Admin_Command
+     (Submission : Queue_Location;
+      Slot       : Natural;
+      Opcode     : Admin_Opcode;
+      Identifier : U16;
+      Namespace  : Namespace_Identifier := No_Namespace;
+      DPTR1      : U64 := 0;
+      DPTR2      : U64 := 0;
+      CDW10      : U32 := 0;
+      CDW11      : U32 := 0;
+      CDW12      : U32 := 0)
+   is
+   begin
+      Write_Raw_Command
+        (Submission, Slot, U8 (Opcode), Identifier, Namespace,
+         DPTR1, DPTR2, CDW10, CDW11, CDW12);
+   end Write_Admin_Command;
+
+   ------------------------
+   -- Write_IO_Command --
+   ------------------------
+
+   procedure Write_IO_Command
+     (Submission : Queue_Location;
+      Slot       : Natural;
+      Opcode     : IO_Opcode;
+      Identifier : U16;
+      Namespace  : Namespace_Identifier;
+      DPTR1      : U64 := 0;
+      DPTR2      : U64 := 0;
+      CDW10      : U32 := 0;
+      CDW11      : U32 := 0;
+      CDW12      : U32 := 0)
+   is
+   begin
+      Write_Raw_Command
+        (Submission, Slot, U8 (Opcode), Identifier, Namespace,
+         DPTR1, DPTR2, CDW10, CDW11, CDW12);
+   end Write_IO_Command;
 
    -----------------------------
    -- Write_Identify_Command --
@@ -224,7 +271,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Result_Address : U64)
    is
    begin
-      Write_Command
+      Write_Admin_Command
         (Submission, Slot, Opcode_Identify, Identifier,
          DPTR1 => Result_Address, CDW10 => Identify_Controller);
    end Write_Identify_Command;
@@ -237,11 +284,11 @@ package body Flyology_VFIO_QEMU.NVMe is
      (Submission     : Queue_Location;
       Slot           : Natural;
       Identifier     : U16;
-      Namespace      : U32;
+      Namespace      : Namespace_Identifier;
       Result_Address : U64)
    is
    begin
-      Write_Command
+      Write_Admin_Command
         (Submission, Slot, Opcode_Identify, Identifier,
          Namespace => Namespace, DPTR1 => Result_Address,
          CDW10 => Identify_Namespace);
@@ -255,7 +302,7 @@ package body Flyology_VFIO_QEMU.NVMe is
      (Submission   : Queue_Location;
       Slot         : Natural;
       Identifier   : U16;
-      Queue_Number : Positive;
+      Queue_Number : Queue_Identifier;
       Entries      : Positive;
       Address      : U64)
    is
@@ -263,7 +310,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       --  Bit zero of the eleventh word says the queue is one contiguous
       --  run of memory rather than a list of pages. It is, because it was
       --  carved out of a single mapped region.
-      Write_Command
+      Write_Admin_Command
         (Submission, Slot, Opcode_Create_Completion_Queue, Identifier,
          DPTR1 => Address,
          CDW10 => U32 (Queue_Number)
@@ -279,13 +326,13 @@ package body Flyology_VFIO_QEMU.NVMe is
      (Submission       : Queue_Location;
       Slot             : Natural;
       Identifier       : U16;
-      Queue_Number     : Positive;
-      Completion_Number : Positive;
-      Entries          : Positive;
-      Address          : U64)
+      Queue_Number      : Queue_Identifier;
+      Completion_Number : Queue_Identifier;
+      Entries           : Positive;
+      Address           : U64)
    is
    begin
-      Write_Command
+      Write_Admin_Command
         (Submission, Slot, Opcode_Create_Submission_Queue, Identifier,
          DPTR1 => Address,
          CDW10 => U32 (Queue_Number)
@@ -302,11 +349,11 @@ package body Flyology_VFIO_QEMU.NVMe is
      (Submission   : Queue_Location;
       Slot         : Natural;
       Identifier   : U16;
-      Opcode       : U8;
-      Queue_Number : Positive)
+      Opcode       : Admin_Opcode;
+      Queue_Number : Queue_Identifier)
    is
    begin
-      Write_Command
+      Write_Admin_Command
         (Submission, Slot, Opcode, Identifier,
          CDW10 => U32 (Queue_Number));
    end Write_Delete_Queue_Command;
@@ -319,8 +366,8 @@ package body Flyology_VFIO_QEMU.NVMe is
      (Submission  : Queue_Location;
       Slot        : Natural;
       Identifier  : U16;
-      Opcode      : U8;
-      Namespace   : U32;
+      Opcode      : IO_Opcode;
+      Namespace   : Namespace_Identifier;
       First_Block : U64;
       Blocks      : Positive;
       Address     : U64)
@@ -329,7 +376,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       --  The block count is held one less than the real number, which is
       --  the single most reliable way to write a driver that transfers one
       --  block too few or one too many.
-      Write_Command
+      Write_IO_Command
         (Submission, Slot, Opcode, Identifier,
          Namespace => Namespace,
          DPTR1 => Address,
@@ -338,6 +385,106 @@ package body Flyology_VFIO_QEMU.NVMe is
          CDW12 => U32 (Blocks - 1));
    end Write_Block_Command;
 
+   ------------------------------
+   -- Write_Feature_Command --
+   ------------------------------
+
+   procedure Write_Feature_Command
+     (Submission : Queue_Location;
+      Slot       : Natural;
+      Identifier : U16;
+      Opcode     : Admin_Opcode;
+      Feature    : Feature_Identifier;
+      Value      : U32 := 0;
+      Namespace  : Namespace_Identifier := No_Namespace)
+   is
+   begin
+      Write_Admin_Command
+        (Submission, Slot, Opcode, Identifier,
+         Namespace => Namespace, CDW10 => U32 (Feature), CDW11 => Value);
+   end Write_Feature_Command;
+
+   -------------------------------
+   -- Write_Log_Page_Command --
+   -------------------------------
+
+   procedure Write_Log_Page_Command
+     (Submission     : Queue_Location;
+      Slot           : Natural;
+      Identifier     : U16;
+      Log            : Log_Identifier;
+      Bytes          : Positive;
+      Result_Address : U64;
+      Namespace      : Namespace_Identifier := All_Namespaces)
+   is
+      --  The length field counts thirty-two bit words and is held one less
+      --  than the real number.
+      Words : constant U32 := U32 (Bytes / 4) - 1;
+   begin
+      Write_Admin_Command
+        (Submission, Slot, Opcode_Get_Log_Page, Identifier,
+         Namespace => Namespace,
+         DPTR1 => Result_Address,
+         CDW10 => U32 (Log)
+                  or Interfaces.Shift_Left (Words and 16#FFFF#, 16),
+         CDW11 => Interfaces.Shift_Right (Words, 16));
+   end Write_Log_Page_Command;
+
+   -----------------------------
+   -- Write_Simple_Command --
+   -----------------------------
+
+   procedure Write_Simple_Command
+     (Submission : Queue_Location;
+      Slot       : Natural;
+      Identifier : U16;
+      Opcode     : IO_Opcode;
+      Namespace  : Namespace_Identifier)
+   is
+   begin
+      Write_IO_Command (Submission, Slot, Opcode, Identifier,
+                        Namespace => Namespace);
+   end Write_Simple_Command;
+
+   ----------------------------------
+   -- Write_Block_Range_Command --
+   ----------------------------------
+
+   procedure Write_Block_Range_Command
+     (Submission  : Queue_Location;
+      Slot        : Natural;
+      Identifier  : U16;
+      Opcode      : IO_Opcode;
+      Namespace   : Namespace_Identifier;
+      First_Block : U64;
+      Blocks      : Positive)
+   is
+   begin
+      Write_IO_Command
+        (Submission, Slot, Opcode, Identifier,
+         Namespace => Namespace,
+         CDW10 => U32 (First_Block and 16#FFFF_FFFF#),
+         CDW11 => U32 (Interfaces.Shift_Right (First_Block, 32)),
+         CDW12 => U32 (Blocks - 1));
+   end Write_Block_Range_Command;
+
+   ---------------------------
+   -- Completion_Result --
+   ---------------------------
+
+   function Completion_Result
+     (Queue : Queue_Location; Slot : Natural) return U32
+   is
+      Entry_At : constant Natural := Slot * Completion_Entry_Bytes;
+      Bytes    : Byte_Array (0 .. 3) with Import,
+        Address => Queue.Host + SSE.Storage_Offset (Entry_At);
+   begin
+      return U32 (Bytes (0))
+        or Interfaces.Shift_Left (U32 (Bytes (1)), 8)
+        or Interfaces.Shift_Left (U32 (Bytes (2)), 16)
+        or Interfaces.Shift_Left (U32 (Bytes (3)), 24);
+   end Completion_Result;
+
    ---------------------------------
    -- Ring_Submission_Doorbell --
    ---------------------------------
@@ -345,13 +492,13 @@ package body Flyology_VFIO_QEMU.NVMe is
    procedure Ring_Submission_Doorbell
      (BAR    : Regions.Window;
       Stride : Positive;
-      Queue  : Natural;
+      Queue  : Queue_Identifier;
       Tail   : Natural)
    is
    begin
       Reg.Write_Release_32
         (BAR,
-         DMA.Byte_Count (Doorbell_Base + 2 * Queue * Stride),
+         DMA.Byte_Count (Doorbell_Base + 2 * Natural (Queue) * Stride),
          U32 (Tail));
    end Ring_Submission_Doorbell;
 
@@ -362,13 +509,13 @@ package body Flyology_VFIO_QEMU.NVMe is
    procedure Ring_Completion_Doorbell
      (BAR    : Regions.Window;
       Stride : Positive;
-      Queue  : Natural;
+      Queue  : Queue_Identifier;
       Head   : Natural)
    is
    begin
       Reg.Write_Release_32
         (BAR,
-         DMA.Byte_Count (Doorbell_Base + (2 * Queue + 1) * Stride),
+         DMA.Byte_Count (Doorbell_Base + (2 * Natural (Queue) + 1) * Stride),
          U32 (Head));
    end Ring_Completion_Doorbell;
 

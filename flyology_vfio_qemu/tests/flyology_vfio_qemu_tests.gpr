@@ -6,7 +6,8 @@ project Flyology_VFIO_QEMU_Tests is
    for Exec_Dir use "bin";
    for Main use
      ("edu_tests.adb", "container_sharing_tests.adb",
-      "pci_testdev_tests.adb", "nvme_tests.adb", "e1000e_tests.adb");
+      "pci_testdev_tests.adb", "nvme_tests.adb", "e1000e_tests.adb",
+      "nvme_coverage_tests.adb", "e1000e_coverage_tests.adb");
    for Create_Missing_Dirs use "True";
 
    package Compiler is

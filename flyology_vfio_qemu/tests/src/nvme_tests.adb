@@ -67,11 +67,25 @@ procedure NVMe_Tests is
    IO_Completion_Offset   : constant DMA.Byte_Count := 20480;
    Write_Buffer_Offset    : constant DMA.Byte_Count := 24576;
    Read_Buffer_Offset     : constant DMA.Byte_Count := 28672;
+   Log_Buffer_Offset      : constant DMA.Byte_Count := 32768;
+
+   --  A transfer larger than two pages needs its remaining pages listed in
+   --  a page of their own, because a command carries only two pointers.
+   Pointer_List_Offset    : constant DMA.Byte_Count := 36864;
+   Large_Buffer_Offset    : constant DMA.Byte_Count := 40960;
+   Large_Buffer_Pages     : constant := 3;
 
    --  One I/O queue pair is enough to read and write. A real driver makes
    --  one per core; a harness making several would only be testing that it
    --  can count.
-   IO_Queue : constant Positive := 1;
+   IO_Queue : constant Controller.Queue_Identifier := 1;
+
+   --  Ada needs a named array type to iterate over a literal list.
+   type Feature_List is array (Positive range <>) of
+     Controller.Feature_Identifier;
+   type Log_List is array (Positive range <>) of
+     Controller.Log_Identifier;
+   type Value_List is array (Positive range <>) of U32;
 
    --  Sixteen entries is more than one command needs and small enough to
    --  fit a page either way.
@@ -224,11 +238,13 @@ begin
                     DMA.Regions.Base_Address (Area);
 
                   Submission : constant Controller.Queue_Location :=
-                    (Host    => Host + SSE.Storage_Offset (Submission_Offset),
+                    (Kind    => Controller.Admin,
+                     Host    => Host + SSE.Storage_Offset (Submission_Offset),
                      Device  => U64 (Window_Base) + U64 (Submission_Offset),
                      Entries => Queue_Entries);
                   Completion : constant Controller.Queue_Location :=
-                    (Host    => Host + SSE.Storage_Offset (Completion_Offset),
+                    (Kind    => Controller.Admin,
+                     Host    => Host + SSE.Storage_Offset (Completion_Offset),
                      Device  => U64 (Window_Base) + U64 (Completion_Offset),
                      Entries => Queue_Entries);
 
@@ -243,13 +259,15 @@ begin
                     U64 (Window_Base) + U64 (Namespace_Info_Offset);
 
                   IO_Submission : constant Controller.Queue_Location :=
-                    (Host    =>
+                    (Kind    => Controller.Namespace_IO,
+                     Host    =>
                        Host + SSE.Storage_Offset (IO_Submission_Offset),
                      Device  =>
                        U64 (Window_Base) + U64 (IO_Submission_Offset),
                      Entries => Queue_Entries);
                   IO_Completion : constant Controller.Queue_Location :=
-                    (Host    =>
+                    (Kind    => Controller.Namespace_IO,
+                     Host    =>
                        Host + SSE.Storage_Offset (IO_Completion_Offset),
                      Device  =>
                        U64 (Window_Base) + U64 (IO_Completion_Offset),
@@ -257,6 +275,27 @@ begin
 
                   IO_Submission_Device : constant U64 := IO_Submission.Device;
                   IO_Completion_Device : constant U64 := IO_Completion.Device;
+
+                  Log_Host : constant System.Address :=
+                    Host + SSE.Storage_Offset (Log_Buffer_Offset);
+                  Log_Device : constant U64 :=
+                    U64 (Window_Base) + U64 (Log_Buffer_Offset);
+
+                  Pointer_List_Host : constant System.Address :=
+                    Host + SSE.Storage_Offset (Pointer_List_Offset);
+                  Pointer_List_Device : constant U64 :=
+                    U64 (Window_Base) + U64 (Pointer_List_Offset);
+                  Large_Device : constant U64 :=
+                    U64 (Window_Base) + U64 (Large_Buffer_Offset);
+
+                  Log_Bytes : array (0 .. 511) of U8
+                    with Import, Volatile, Address => Log_Host;
+                  Pointer_Bytes : array (0 .. 4095) of U8
+                    with Import, Volatile, Address => Pointer_List_Host;
+                  Large_Bytes : array (0 .. 4096 * Large_Buffer_Pages - 1)
+                    of U8 with Import, Volatile,
+                         Address =>
+                           Host + SSE.Storage_Offset (Large_Buffer_Offset);
 
                   Write_Buffer_Device : constant U64 :=
                     U64 (Window_Base) + U64 (Write_Buffer_Offset);
@@ -305,6 +344,7 @@ begin
                   --  before, and it flips each time the queue wraps.
                   declare
                      Admin_Slot  : Natural := 0;
+                     Last_Admin  : Natural := 0;
                      Admin_Phase : Boolean := True;
                      Next_ID     : U16 := 16#1000#;
 
@@ -321,6 +361,7 @@ begin
                      function Run_Admin return Controller.Completion is
                         Answer : Controller.Completion;
                      begin
+                        Last_Admin := Admin_Slot;
                         Controller.Ring_Submission_Doorbell
                           (BAR, Stride, Queue => 0,
                            Tail => (Admin_Slot + 1) mod Queue_Entries);
@@ -419,6 +460,247 @@ begin
                        (U64 (Block_Bytes) * Block_Count >= 16#100_0000#,
                         "the namespace is at least the sixteen mebibytes the"
                         & " machine was given");
+
+                     ------------------------------------------------------
+                     --  What else the controller can be asked
+                     ------------------------------------------------------
+
+                     --  The namespaces that exist, rather than the one this
+                     --  test assumed. A controller reporting two hundred
+                     --  and fifty-six possible namespaces has far fewer
+                     --  actual ones, and the list is how a driver finds out
+                     --  which.
+                     Controller.Write_Admin_Command
+                       (Submission, Admin_Slot, Controller.Opcode_Identify,
+                        Next_ID, DPTR1 => Log_Device,
+                        CDW10 => Controller.Identify_Active_Namespaces);
+                     Harness.Check_Equal
+                       (U32 (Run_Admin.Status), 0,
+                        "listing the active namespaces succeeded");
+                     Next_ID := Next_ID + 1;
+                     Harness.Check
+                       (Log_Bytes (0) = 1 and then Log_Bytes (1) = 0
+                          and then Log_Bytes (2) = 0
+                          and then Log_Bytes (3) = 0,
+                        "the first active namespace is namespace one, which"
+                        & " is the one this test uses");
+
+                     --  How many I/O queues the controller will allow. A
+                     --  driver that creates queues without asking gets as
+                     --  far as the limit and then fails one at a time.
+                     Controller.Write_Feature_Command
+                       (Submission, Admin_Slot, Next_ID,
+                        Controller.Opcode_Get_Features,
+                        Controller.Feature_Number_Of_Queues);
+                     Harness.Check_Equal
+                       (U32 (Run_Admin.Status), 0,
+                        "asking how many I/O queues are allowed succeeded");
+                     declare
+                        Allowed : constant U32 :=
+                          Controller.Completion_Result (Completion,
+                                                        Last_Admin);
+                        --  Both halves are held one less than the real
+                        --  number, in the specification's usual style.
+                        Submissions : constant Natural :=
+                          Natural (Allowed and 16#FFFF#) + 1;
+                        Completions : constant Natural :=
+                          Natural (Interfaces.Shift_Right (Allowed, 16)) + 1;
+                     begin
+                        Harness.Note
+                          ("the controller allows"
+                           & Natural'Image (Submissions) & " submission and"
+                           & Natural'Image (Completions)
+                           & " completion queues");
+                        Harness.Check
+                          (Submissions >= 1 and then Completions >= 1,
+                           "it allows at least one queue of each kind");
+                     end;
+                     Next_ID := Next_ID + 1;
+
+                     --  Features are checked by changing them and
+                     --  reading them back, not by seeing whether the
+                     --  command returns success. A controller that
+                     --  accepted every Set Features and remembered none of
+                     --  them would pass a status check and fail this.
+                     --
+                     --  Which features are settable, and which need a
+                     --  namespace, is the controller's business; the
+                     --  coverage probe in nvme_coverage_tests discovers
+                     --  that mechanically. What is checked here is that
+                     --  the ones QEMU does implement actually work.
+
+                     --  The write cache: turn it off, confirm, turn it
+                     --  back on, confirm again. Both directions, so a
+                     --  controller that always answers the same value
+                     --  cannot pass.
+                     declare
+                        Original : U32;
+
+                        function Read_Cache return U32;
+
+                        function Read_Cache return U32 is
+                        begin
+                           Controller.Write_Feature_Command
+                             (Submission, Admin_Slot, Next_ID,
+                              Controller.Opcode_Get_Features,
+                              Controller.Feature_Volatile_Write_Cache);
+                           if Run_Admin.Status /= 0 then
+                              return 16#FFFF_FFFF#;
+                           end if;
+                           Next_ID := Next_ID + 1;
+                           return Controller.Completion_Result
+                                    (Completion, Last_Admin);
+                        end Read_Cache;
+                     begin
+                        Original := Read_Cache;
+
+                        if Original = 16#FFFF_FFFF# then
+                           Harness.Skip
+                             ("the write cache feature",
+                              "this controller does not report it");
+                        else
+                           Harness.Note
+                             ("the write cache reads as"
+                              & U32'Image (Original and 1));
+
+                           for Wanted of Value_List'[0, 1] loop
+                              Controller.Write_Feature_Command
+                                (Submission, Admin_Slot, Next_ID,
+                                 Controller.Opcode_Set_Features,
+                                 Controller.Feature_Volatile_Write_Cache,
+                                 Value => Wanted);
+                              Harness.Check_Equal
+                                (U32 (Run_Admin.Status), 0,
+                                 "setting the write cache to"
+                                 & U32'Image (Wanted) & " is accepted");
+                              Next_ID := Next_ID + 1;
+
+                              Harness.Check_Equal
+                                (Read_Cache and 1, Wanted,
+                                 "and reading it back gives"
+                                 & U32'Image (Wanted) & ", so the"
+                                 & " controller kept it");
+                           end loop;
+
+                           --  Left as it was found.
+                           Controller.Write_Feature_Command
+                             (Submission, Admin_Slot, Next_ID,
+                              Controller.Opcode_Set_Features,
+                              Controller.Feature_Volatile_Write_Cache,
+                              Value => Original);
+                           Harness.Check_Equal
+                             (U32 (Run_Admin.Status), 0,
+                              "the original setting is restored");
+                           Next_ID := Next_ID + 1;
+                        end if;
+                     end;
+
+                     --  Error recovery is per-namespace, which is why it
+                     --  needs a namespace identifier where the write cache
+                     --  does not. Naming one for a controller-scope
+                     --  feature, or omitting one here, is refused — which
+                     --  is the controller being right and a driver being
+                     --  wrong, and is easy to mistake for the reverse.
+                     declare
+                        Wanted : constant U32 := 16#0000_0007#;
+                     begin
+                        Controller.Write_Feature_Command
+                          (Submission, Admin_Slot, Next_ID,
+                           Controller.Opcode_Set_Features,
+                           Controller.Feature_Error_Recovery,
+                           Value => Wanted, Namespace => 1);
+                        if Run_Admin.Status = 0 then
+                           Next_ID := Next_ID + 1;
+                           Controller.Write_Feature_Command
+                             (Submission, Admin_Slot, Next_ID,
+                              Controller.Opcode_Get_Features,
+                              Controller.Feature_Error_Recovery,
+                              Namespace => 1);
+                           Harness.Check_Equal
+                             (U32 (Run_Admin.Status), 0,
+                              "error recovery can be read back for a"
+                              & " namespace");
+                           Harness.Check_Equal
+                             (Controller.Completion_Result
+                                (Completion, Last_Admin) and 16#FFFF#,
+                              Wanted,
+                              "and it holds what was set");
+                           Next_ID := Next_ID + 1;
+                        else
+                           Harness.Skip
+                             ("error recovery round trip",
+                              "this controller refused to set it");
+                           Next_ID := Next_ID + 1;
+                        end if;
+                     end;
+
+                     --  A feature identifier nothing defines must be
+                     --  refused, not answered with rubbish.
+                     Controller.Write_Feature_Command
+                       (Submission, Admin_Slot, Next_ID,
+                        Controller.Opcode_Get_Features,
+                        Controller.Feature_Undefined);
+                     Harness.Check
+                       (Run_Admin.Status /= 0,
+                        "an undefined feature is refused with a status");
+                     Next_ID := Next_ID + 1;
+
+                     --  An opcode nothing defines, likewise. Note that it
+                     --  goes through the admin entry point: the compiler
+                     --  refuses to send an admin opcode to a namespace
+                     --  queue, which is the whole reason the two are
+                     --  different types.
+                     Controller.Write_Admin_Command
+                       (Submission, Admin_Slot,
+                        Controller.Opcode_Undefined, Next_ID);
+                     Harness.Check
+                       (Run_Admin.Status /= 0,
+                        "an undefined admin opcode is refused with a status"
+                        & " rather than ignored");
+                     Next_ID := Next_ID + 1;
+
+                     --  The health log, which is where a controller says
+                     --  how much has passed through it.
+                     Controller.Write_Log_Page_Command
+                       (Submission, Admin_Slot, Next_ID,
+                        Controller.Log_Health_Information, 512, Log_Device);
+                     Harness.Check_Equal
+                       (U32 (Run_Admin.Status), 0,
+                        "the health log can be read");
+                     Next_ID := Next_ID + 1;
+
+                     declare
+                        --  Little-endian, like every multi-byte field in
+                        --  an NVMe structure. Reading it the other way
+                        --  round gives a number that looks like a plausible
+                        --  raw value and is not a temperature at all.
+                        Temperature : constant Natural :=
+                          Natural (Log_Bytes (1))
+                          + Natural (Log_Bytes (2)) * 256;
+                     begin
+                        Harness.Note
+                          ("the controller reports a composite temperature"
+                           & " of" & Natural'Image (Temperature) & " kelvin");
+                        Harness.Check
+                          (Temperature > 200 and then Temperature < 400,
+                           "which is a plausible temperature, so the log is"
+                           & " real data rather than an empty buffer");
+                     end;
+
+                     --  The error log and the firmware log, which QEMU
+                     --  answers with well-formed but empty structures.
+                     for Log of Log_List'[
+                       Controller.Log_Error_Information,
+                       Controller.Log_Firmware_Slot]
+                     loop
+                        Controller.Write_Log_Page_Command
+                          (Submission, Admin_Slot, Next_ID, Log, 512,
+                           Log_Device);
+                        Harness.Check_Equal
+                          (U32 (Run_Admin.Status), 0,
+                           "log 0x" & Hex_16 (U16 (Log)) & " can be read");
+                        Next_ID := Next_ID + 1;
+                     end loop;
 
                      ------------------------------------------------------
                      --  Create an I/O queue pair
@@ -575,6 +857,192 @@ begin
                                       = U8 ((4096 * 31 + 17) mod 256),
                            "block zero still holds the first pattern, so"
                            & " the second write went where it was told");
+
+                        ---------------------------------------------
+                        --  The rest of the command set
+                        ---------------------------------------------
+
+                        --  Flush, which means something only if there is a
+                        --  write cache, and must be accepted either way.
+                        Controller.Write_Simple_Command
+                          (IO_Submission, IO_Slot, Next_ID,
+                           Controller.Opcode_Flush, 1);
+                        Harness.Check_Equal
+                          (U32 (Run_IO.Status), 0, "Flush is accepted");
+                        Next_ID := Next_ID + 1;
+
+                        --  Compare, against data known to match. The
+                        --  buffer still holds what was written at the
+                        --  later block, and that is what is there.
+                        Controller.Write_Block_Command
+                          (IO_Submission, IO_Slot, Next_ID,
+                           Controller.Opcode_Compare, 1,
+                           U64 (Blocks_Per_Buffer) * 4,
+                           Blocks_Per_Buffer, Write_Buffer_Device);
+                        Harness.Check_Equal
+                          (U32 (Run_IO.Status), 0,
+                           "Compare against matching data succeeds");
+                        Next_ID := Next_ID + 1;
+
+                        --  And against data known not to match, which must
+                        --  be reported rather than passed.
+                        Write_Bytes (1) := Write_Bytes (1) xor 16#FF#;
+                        Controller.Write_Block_Command
+                          (IO_Submission, IO_Slot, Next_ID,
+                           Controller.Opcode_Compare, 1,
+                           U64 (Blocks_Per_Buffer) * 4,
+                           Blocks_Per_Buffer, Write_Buffer_Device);
+                        Harness.Check
+                          (Run_IO.Status /= 0,
+                           "Compare against differing data reports a"
+                           & " mismatch rather than succeeding");
+                        Next_ID := Next_ID + 1;
+                        Write_Bytes (1) := Write_Bytes (1) xor 16#FF#;
+
+                        --  Verify, which checks blocks are readable without
+                        --  transferring them.
+                        Controller.Write_Block_Range_Command
+                          (IO_Submission, IO_Slot, Next_ID,
+                           Controller.Opcode_Verify, 1, 0,
+                           Blocks_Per_Buffer);
+                        Harness.Check_Equal
+                          (U32 (Run_IO.Status), 0, "Verify is accepted");
+                        Next_ID := Next_ID + 1;
+
+                        --  Write Zeroes, then read back to confirm they
+                        --  really are zero. A controller that accepted the
+                        --  command and did nothing would pass the status
+                        --  check alone.
+                        Controller.Write_Block_Range_Command
+                          (IO_Submission, IO_Slot, Next_ID,
+                           Controller.Opcode_Write_Zeroes, 1, 0,
+                           Blocks_Per_Buffer);
+                        Harness.Check_Equal
+                          (U32 (Run_IO.Status), 0,
+                           "Write Zeroes is accepted");
+                        Next_ID := Next_ID + 1;
+
+                        Read_Bytes := (others => 16#AA#);
+                        Controller.Write_Block_Command
+                          (IO_Submission, IO_Slot, Next_ID,
+                           Controller.Opcode_Read, 1, 0,
+                           Blocks_Per_Buffer, Read_Buffer_Device);
+                        Harness.Check_Equal
+                          (U32 (Run_IO.Status), 0,
+                           "reading the zeroed blocks succeeded");
+                        Next_ID := Next_ID + 1;
+
+                        declare
+                           All_Zero : Boolean := True;
+                        begin
+                           for Index in Read_Bytes'Range loop
+                              if Read_Bytes (Index) /= 0 then
+                                 All_Zero := False;
+                              end if;
+                           end loop;
+                           Harness.Check
+                             (All_Zero,
+                              "every byte of the zeroed blocks reads back"
+                              & " as zero, so the command did the work"
+                              & " rather than only accepting it");
+                        end;
+
+                        --  A transfer larger than two pages. One command
+                        --  carries two pointers; anything beyond that is a
+                        --  page listing the rest. Getting this wrong
+                        --  transfers the first two pages correctly and
+                        --  silently drops the remainder, which is why it is
+                        --  worth testing at exactly three.
+                        declare
+                           Blocks : constant Positive :=
+                             Positive (4096 * Large_Buffer_Pages
+                                       / Block_Bytes);
+                        begin
+                           for Index in Large_Bytes'Range loop
+                              Large_Bytes (Index) :=
+                                U8 ((Index * 13 + 3) mod 256);
+                           end loop;
+
+                           --  The list holds every page after the first.
+                           Pointer_Bytes := (others => 0);
+                           for Page in 1 .. Large_Buffer_Pages - 1 loop
+                              declare
+                                 Address : constant U64 :=
+                                   Large_Device + U64 (Page) * 4096;
+                                 At_Offset : constant Natural :=
+                                   (Page - 1) * 8;
+                              begin
+                                 for Byte in 0 .. 7 loop
+                                    Pointer_Bytes (At_Offset + Byte) :=
+                                      U8 (Interfaces.Shift_Right
+                                            (Address, 8 * Byte) and 16#FF#);
+                                 end loop;
+                              end;
+                           end loop;
+
+                           Controller.Write_IO_Command
+                             (IO_Submission, IO_Slot,
+                              Controller.Opcode_Write, Next_ID,
+                              Namespace => 1,
+                              DPTR1 => Large_Device,
+                              DPTR2 => Pointer_List_Device,
+                              CDW10 => U32 (Blocks_Per_Buffer) * 8,
+                              CDW12 => U32 (Blocks - 1));
+                           Harness.Check_Equal
+                             (U32 (Run_IO.Status), 0,
+                              "a write spanning" & Positive'Image
+                                (Large_Buffer_Pages)
+                              & " pages through a pointer list succeeded");
+                           Next_ID := Next_ID + 1;
+
+                           declare
+                              Expected : array (Large_Bytes'Range) of U8;
+                           begin
+                              for Index in Large_Bytes'Range loop
+                                 Expected (Index) := Large_Bytes (Index);
+                                 Large_Bytes (Index) := 0;
+                              end loop;
+
+                              Controller.Write_IO_Command
+                                (IO_Submission, IO_Slot,
+                                 Controller.Opcode_Read, Next_ID,
+                                 Namespace => 1,
+                                 DPTR1 => Large_Device,
+                                 DPTR2 => Pointer_List_Device,
+                                 CDW10 => U32 (Blocks_Per_Buffer) * 8,
+                                 CDW12 => U32 (Blocks - 1));
+                              Harness.Check_Equal
+                                (U32 (Run_IO.Status), 0,
+                                 "reading it back succeeded");
+                              Next_ID := Next_ID + 1;
+
+                              declare
+                                 Same      : Boolean := True;
+                                 First_Bad : Natural := 0;
+                              begin
+                                 for Index in Large_Bytes'Range loop
+                                    if Large_Bytes (Index)
+                                         /= Expected (Index)
+                                    then
+                                       Same := False;
+                                       if First_Bad = 0 then
+                                          First_Bad := Index;
+                                       end if;
+                                    end if;
+                                 end loop;
+                                 Harness.Check
+                                   (Same,
+                                    "all" & Positive'Image
+                                      (Large_Buffer_Pages)
+                                    & " pages came back, including the ones"
+                                    & " reached only through the pointer"
+                                    & " list"
+                                    & (if First_Bad = 0 then ""
+                                       else ", first difference at byte"
+                                            & Natural'Image (First_Bad)));
+                              end;
+                           end;
+                        end;
 
                         --  And a command that must fail. A read past the
                         --  end of the namespace has to be refused with a
