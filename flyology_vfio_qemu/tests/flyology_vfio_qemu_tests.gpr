@@ -7,7 +7,7 @@ project Flyology_VFIO_QEMU_Tests is
    for Main use
      ("edu_tests.adb", "container_sharing_tests.adb",
       "pci_testdev_tests.adb", "nvme_tests.adb", "e1000e_tests.adb",
-      "nvme_coverage_tests.adb", "e1000e_coverage_tests.adb", "msix_tests.adb", "nvme_queues_tests.adb");
+      "nvme_coverage_tests.adb", "e1000e_coverage_tests.adb", "msix_tests.adb", "nvme_queues_tests.adb", "nvme_zoned_tests.adb");
    for Create_Missing_Dirs use "True";
 
    package Compiler is

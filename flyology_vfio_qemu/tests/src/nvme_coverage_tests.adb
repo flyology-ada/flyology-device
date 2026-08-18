@@ -12,8 +12,16 @@
 --  not implement an opcode answers Invalid Command Opcode, which is a
 --  different answer from a controller that implements it and rejects the
 --  arguments. So "implemented" here means "answered with anything other
---  than Invalid Command Opcode", which is exactly the question a coverage
---  report should ask.
+--  than Invalid Command Opcode".
+--
+--  That test has a known weakness, and it has already misled this
+--  repository once. A controller may validate other fields before it
+--  checks the opcode, so a command with a wrong namespace can be refused
+--  as Invalid Namespace and counted present when the opcode is defined by
+--  nothing at all. That is exactly what happened to an entry mislabelled
+--  0Dh here when Zone Append is 7Dh: the probe reported it implemented,
+--  and only driving it functionally found otherwise. A probe counts what
+--  answers, which is not quite the same as what exists.
 --
 --  The report then compares that surface against the list of commands the
 --  functional tests drive, and fails when the functional tests fall behind
@@ -159,13 +167,13 @@ procedure NVMe_Coverage_Tests is
       Described (16#08#, "Write Zeroes"),
       Described (16#09#, "Dataset Management"),
       Described (16#0C#, "Verify"),
-      Described (16#0D#, "Zone Append"),
       Described (16#0E#, "Reservation Register"),
       Described (16#11#, "Reservation Report"),
       Described (16#15#, "Reservation Acquire"),
       Described (16#19#, "Copy"),
       Described (16#79#, "Zone Management Send"),
-      Described (16#7A#, "Zone Management Receive")];
+      Described (16#7A#, "Zone Management Receive"),
+      Described (16#7D#, "Zone Append")];
 
    --  The commands the functional suite actually drives. Coverage is the
    --  ratio of this to what the controller turns out to implement, and the
@@ -177,14 +185,15 @@ procedure NVMe_Coverage_Tests is
 
    Exercised_Admin : constant Admin_Opcode_List :=
      [16#00#, 16#01#, 16#02#, 16#04#, 16#05#, 16#06#, 16#08#, 16#09#,
-      16#0A#, 16#1A#, 16#7C#];
+      16#0A#, 16#15#, 16#1A#, 16#7C#];
    Exercised_IO : constant IO_Opcode_List :=
-     [16#00#, 16#01#, 16#02#, 16#04#, 16#05#, 16#08#, 16#09#, 16#0C#];
+     [16#00#, 16#01#, 16#02#, 16#04#, 16#05#, 16#08#, 16#09#, 16#0C#,
+      16#79#, 16#7A#, 16#7D#];
 
    --  What the functional suite reached when this floor was last reviewed.
    --  A number below it means coverage has been lost.
-   Admin_Coverage_Floor : constant := 11;
-   IO_Coverage_Floor    : constant := 8;
+   Admin_Coverage_Floor : constant := 12;
+   IO_Coverage_Floor    : constant := 11;
 
    function Is_Exercised
      (Opcode : Controller.Admin_Opcode;

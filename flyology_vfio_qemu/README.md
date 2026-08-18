@@ -63,6 +63,13 @@ back:
   controller: it tells it to commit what it is holding, and reports its
   progress in a status field of its own.
 
+A second, zoned namespace carries the zone commands: zones are reported,
+emptied, appended to — the controller choosing where the data lands and
+saying so afterwards, which is the property the command set exists for —
+finished, refused further appends once full, and reset. A third namespace
+is detached and reattached at run time, with the active namespace list
+confirming it.
+
 Its feature surface is read four ways rather than one — current, default,
 saved, and which of those the feature supports — because a driver reading
 only the current value cannot tell a controller that ignored a Set from one
@@ -112,8 +119,8 @@ What they currently report:
 
 | Surface | Implemented | Exercised |
 | --- | --- | --- |
-| NVMe admin commands | 13 of 25 probed (7 more deliberately not probed) | 11 |
-| NVMe namespace commands | 15 of 15 probed | 8 |
+| NVMe admin commands | 13 of 25 probed (7 more deliberately not probed) | 12 |
+| NVMe namespace commands | 15 of 15 probed | 11 |
 | NVMe features | 12 of 32 answer without a namespace | 3 driven, 2 round-tripped |
 | NVMe logs | 5 of 16 | 3 |
 | e1000e registers | 42 of 42 probed answer | 34 |
@@ -144,6 +151,18 @@ and `0x19`.
 controller-scope feature named with a namespace identifier is refused, and a
 per-namespace feature without one likewise. Both refusals are correct and
 both are easy to read as the controller being wrong.
+
+**Reservations cannot be reached at all.** The three reservation commands
+appear in QEMU's command-set table and its NVMe device offers no option
+under which they work — there is no `reservations=` on either the
+controller or a namespace. They are the one part of the command set here
+that is unreachable rather than merely unwritten.
+
+**A zoned namespace needs asking for twice.** The zone commands exist only
+on a namespace configured for them *and* only when the controller was
+enabled with every I/O command set selected rather than the basic one. Miss
+the second and every zoned command answers Invalid Command Opcode, which
+is indistinguishable from a controller that does not implement them.
 
 **Write Uncorrectable is advertised and refused.** The probe sees it
 answered with something other than Invalid Command Opcode, so it counts as

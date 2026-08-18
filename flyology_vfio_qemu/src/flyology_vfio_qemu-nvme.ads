@@ -235,6 +235,19 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @exception Device_Misbehaved The controller did not become not-ready
    procedure Disable (BAR : Regions.Window; Attempts : Positive := 20_000);
 
+   --  Whether the controller supports command sets beyond the basic one.
+   --
+   --  A zoned namespace is addressed through a different I/O command set,
+   --  and a controller enabled for the basic set alone answers Invalid
+   --  Command Opcode to every zoned command — which looks exactly like a
+   --  controller that does not implement them.
+   --
+   --  @param Capabilities A reading of the capabilities register
+   --  @return True when more than the basic command set is available
+   function Supports_Multiple_Command_Sets
+     (Capabilities : U64) return Boolean
+     is ((Interfaces.Shift_Right (Capabilities, 43) and 1) = 1);
+
    --  Points the controller at admin queues and enables it.
    --
    --  Both queue addresses are I/O virtual addresses, and the controller
@@ -246,14 +259,22 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @param BAR The controller's mapped registers
    --  @param Submission Where the admin submission queue lives
    --  @param Completion Where the admin completion queue lives
+   --  All_Command_Sets asks for every I/O command set the controller
+   --  supports rather than the basic one alone. Without it a zoned
+   --  namespace is unreachable and says so in a way indistinguishable from
+   --  not existing.
+   --
    --  @param Attempts How many times to poll before giving up
+   --  @param All_Command_Sets Whether to select every supported I/O
+   --    command set; ignored when the controller offers only the basic one
    --  @exception Device_Misbehaved The controller did not become ready, or
    --    reported a fatal error
    procedure Enable
-     (BAR        : Regions.Window;
-      Submission : Queue_Location;
-      Completion : Queue_Location;
-      Attempts   : Positive := 20_000);
+     (BAR              : Regions.Window;
+      Submission       : Queue_Location;
+      Completion       : Queue_Location;
+      Attempts         : Positive := 20_000;
+      All_Command_Sets : Boolean := True);
 
    --  Asks the controller to shut down, and waits until it has.
    --
@@ -306,7 +327,8 @@ package Flyology_VFIO_QEMU.NVMe is
       DPTR2      : U64 := 0;
       CDW10      : U32 := 0;
       CDW11      : U32 := 0;
-      CDW12      : U32 := 0)
+      CDW12      : U32 := 0;
+      CDW13      : U32 := 0)
      with Pre => Submission.Kind = Admin;
 
    --  The same, for a command sent to a namespace queue.
@@ -331,7 +353,8 @@ package Flyology_VFIO_QEMU.NVMe is
       DPTR2      : U64 := 0;
       CDW10      : U32 := 0;
       CDW11      : U32 := 0;
-      CDW12      : U32 := 0)
+      CDW12      : U32 := 0;
+      CDW13      : U32 := 0)
      with Pre => Submission.Kind = Namespace_IO;
 
    --  Admin opcode: describe the controller or a namespace.
@@ -395,6 +418,164 @@ package Flyology_VFIO_QEMU.NVMe is
    --  I/O opcode: tell the controller what a range of blocks is for, or
    --  that it is no longer needed.
    Opcode_Dataset_Management : constant IO_Opcode := 16#09#;
+
+   --  Admin opcode: attach a namespace to a controller, or detach it.
+   Opcode_Namespace_Attachment : constant Admin_Opcode := 16#15#;
+
+   --  I/O opcode: write at whatever offset the zone has reached, and be
+   --  told afterwards where that was. The point of a zoned namespace: many
+   --  writers can append to one zone without agreeing a position first.
+   --
+   --  Note the number. It is 7Dh, near its two companions at 79h and 7Ah,
+   --  and not 0Dh — which is what it gets mistaken for, because 0Dh sits
+   --  where a reader skimming the low opcodes expects it and is defined by
+   --  nothing at all.
+   Opcode_Zone_Append : constant IO_Opcode := 16#7D#;
+
+   --  I/O opcode: change a zone's state.
+   Opcode_Zone_Send : constant IO_Opcode := 16#79#;
+
+   --  I/O opcode: describe zones.
+   Opcode_Zone_Receive : constant IO_Opcode := 16#7A#;
+
+   --  What a Zone Management Send should do to the zone it names.
+   --
+   --  @enum Close Stop writing to it, keeping what is written
+   --  @enum Finish Declare it full, whatever its write pointer says
+   --  @enum Open Make it explicitly writable
+   --  @enum Reset Empty it and return its write pointer to the start
+   --  @enum Offline Take a full zone out of service
+   type Zone_Action is (Close, Finish, Open, Reset, Offline);
+
+   --  What state a zone is in, as a report describes it.
+   --
+   --  @enum Empty Nothing written
+   --  @enum Implicitly_Open Being written without having been opened
+   --  @enum Explicitly_Open Opened on purpose
+   --  @enum Closed Written and set aside
+   --  @enum Full No more may be written
+   --  @enum Read_Only Readable and not writable
+   --  @enum Offline Neither
+   --  @enum Unknown A state this crate does not name
+   type Zone_State is
+     (Empty, Implicitly_Open, Explicitly_Open, Closed, Full, Read_Only,
+      Offline, Unknown);
+
+   --  One zone, as a report describes it.
+   --
+   --  @field Start The first block of the zone
+   --  @field Capacity How many blocks it can hold, which may be fewer than
+   --    the distance to the next zone
+   --  @field Write_Pointer The block an append would land on
+   --  @field State What may be done to it
+   type Zone_Description is record
+      Start         : U64;
+      Capacity      : U64;
+      Write_Pointer : U64;
+      State         : Zone_State;
+   end record;
+
+   --  How large one zone descriptor is in a report.
+   Zone_Descriptor_Bytes : constant := 64;
+
+   --  How large the header before the first descriptor is.
+   Zone_Report_Header_Bytes : constant := 64;
+
+   --  Writes a command describing zones.
+   --  @param Submission Where the namespace submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Namespace Which namespace
+   --  @param First_Block Where to start describing
+   --  @param Bytes How large the report buffer is
+   --  @param Result_Address Where to deliver the report
+   procedure Write_Zone_Report_Command
+     (Submission     : Queue_Location;
+      Slot           : Natural;
+      Identifier     : U16;
+      Namespace      : Namespace_Identifier;
+      First_Block    : U64;
+      Bytes          : Positive;
+      Result_Address : U64)
+     with Pre => Submission.Kind = Namespace_IO;
+
+   --  Writes a command changing a zone's state.
+   --  @param Submission Where the namespace submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Namespace Which namespace
+   --  @param First_Block The first block of the zone to act on
+   --  @param Action What to do to it
+   --  @param All_Zones Whether to do it to every zone instead
+   procedure Write_Zone_Action_Command
+     (Submission  : Queue_Location;
+      Slot        : Natural;
+      Identifier  : U16;
+      Namespace   : Namespace_Identifier;
+      First_Block : U64;
+      Action      : Zone_Action;
+      All_Zones   : Boolean := False)
+     with Pre => Submission.Kind = Namespace_IO;
+
+   --  Writes a command appending to a zone.
+   --  @param Submission Where the namespace submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Namespace Which namespace
+   --  @param Zone_Start The first block of the zone to append to
+   --  @param Blocks How many blocks to write, counted from one
+   --  @param Address Where the data lives, as a device address
+   procedure Write_Zone_Append_Command
+     (Submission : Queue_Location;
+      Slot       : Natural;
+      Identifier : U16;
+      Namespace  : Namespace_Identifier;
+      Zone_Start : U64;
+      Blocks     : Positive;
+      Address    : U64)
+     with Pre => Submission.Kind = Namespace_IO;
+
+   --  Writes a command attaching a namespace to controllers, or detaching.
+   --  @param Submission Where the admin submission queue lives
+   --  @param Slot Which entry to write, from zero
+   --  @param Identifier The command identifier
+   --  @param Namespace Which namespace to attach or detach
+   --  @param Attach True to attach, False to detach
+   --  @param List_Address Where the controller list lives
+   procedure Write_Namespace_Attachment_Command
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Namespace    : Namespace_Identifier;
+      Attach       : Boolean;
+      List_Address : U64)
+     with Pre => Submission.Kind = Admin;
+
+   --  Fills in a controller list naming one controller.
+   --  @param List Where the list lives
+   --  @param Controller Which controller identifier to name
+   procedure Write_Controller_List
+     (List : System.Address; Controller : U16);
+
+   --  How many zones a report says the namespace has.
+   --  @param Report Address of the report
+   --  @return The zone count
+   function Reported_Zones (Report : System.Address) return U64;
+
+   --  One zone out of a report.
+   --  @param Report Address of the report
+   --  @param Index Which descriptor, from zero
+   --  @return What the report says about it
+   function Reported_Zone
+     (Report : System.Address; Index : Natural) return Zone_Description;
+
+   --  Where a Zone Append actually landed, which the controller chooses
+   --  and reports rather than the caller deciding.
+   --  @param Queue Where the completion queue lives
+   --  @param Slot Which entry to read
+   --  @return The first block written
+   function Appended_At
+     (Queue : Queue_Location; Slot : Natural) return U64;
 
    --  An opcode no command set defines, for checking that a controller
    --  refuses what it does not implement rather than ignoring it.

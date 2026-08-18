@@ -122,11 +122,24 @@ package body Flyology_VFIO_QEMU.NVMe is
    ------------
 
    procedure Enable
-     (BAR        : Regions.Window;
-      Submission : Queue_Location;
-      Completion : Queue_Location;
-      Attempts   : Positive := 20_000)
+     (BAR              : Regions.Window;
+      Submission       : Queue_Location;
+      Completion       : Queue_Location;
+      Attempts         : Positive := 20_000;
+      All_Command_Sets : Boolean := True)
    is
+      Capabilities : constant U64 :=
+        Reg.Read_64 (BAR, Capabilities_Register);
+
+      --  Six selects every I/O command set the controller supports; zero
+      --  selects the basic one alone. Asking for six on a controller that
+      --  does not offer it is refused, so the choice follows what the
+      --  capabilities register reports rather than what was asked for.
+      Command_Sets : constant U32 :=
+        (if All_Command_Sets
+           and then Supports_Multiple_Command_Sets (Capabilities)
+         then Interfaces.Shift_Left (6, 4)
+         else 0);
       --  Both counts are held one less than the real number, as the
       --  specification defines them.
       Attributes : constant U32 :=
@@ -138,6 +151,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       --  bytes of submission entry and sixteen of completion.
       Configuration : constant U32 :=
         Configuration_Enable
+        or Command_Sets
         or Interfaces.Shift_Left (6, 16)
         or Interfaces.Shift_Left (4, 20);
 
@@ -194,7 +208,8 @@ package body Flyology_VFIO_QEMU.NVMe is
       DPTR2      : U64;
       CDW10      : U32;
       CDW11      : U32;
-      CDW12      : U32)
+      CDW12      : U32;
+      CDW13      : U32)
    is
       Base     : constant System.Address := Submission.Host;
       Entry_At : constant Natural := Slot * Submission_Entry_Bytes;
@@ -214,6 +229,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Put_32 (Base, Entry_At + 40, CDW10);
       Put_32 (Base, Entry_At + 44, CDW11);
       Put_32 (Base, Entry_At + 48, CDW12);
+      Put_32 (Base, Entry_At + 52, CDW13);
    end Write_Raw_Command;
 
    ---------------------------
@@ -230,12 +246,13 @@ package body Flyology_VFIO_QEMU.NVMe is
       DPTR2      : U64 := 0;
       CDW10      : U32 := 0;
       CDW11      : U32 := 0;
-      CDW12      : U32 := 0)
+      CDW12      : U32 := 0;
+      CDW13      : U32 := 0)
    is
    begin
       Write_Raw_Command
         (Submission, Slot, U8 (Opcode), Identifier, Namespace,
-         DPTR1, DPTR2, CDW10, CDW11, CDW12);
+         DPTR1, DPTR2, CDW10, CDW11, CDW12, CDW13);
    end Write_Admin_Command;
 
    ------------------------
@@ -252,12 +269,13 @@ package body Flyology_VFIO_QEMU.NVMe is
       DPTR2      : U64 := 0;
       CDW10      : U32 := 0;
       CDW11      : U32 := 0;
-      CDW12      : U32 := 0)
+      CDW12      : U32 := 0;
+      CDW13      : U32 := 0)
    is
    begin
       Write_Raw_Command
         (Submission, Slot, U8 (Opcode), Identifier, Namespace,
-         DPTR1, DPTR2, CDW10, CDW11, CDW12);
+         DPTR1, DPTR2, CDW10, CDW11, CDW12, CDW13);
    end Write_IO_Command;
 
    -----------------------------
@@ -583,6 +601,207 @@ package body Flyology_VFIO_QEMU.NVMe is
       Put_32 (List, At_Offset + 4, U32 (Blocks));
       Put_64 (List, At_Offset + 8, First_Block);
    end Write_Deallocate_Range;
+
+   ---------------------------------
+   -- Write_Zone_Report_Command --
+   ---------------------------------
+
+   procedure Write_Zone_Report_Command
+     (Submission     : Queue_Location;
+      Slot           : Natural;
+      Identifier     : U16;
+      Namespace      : Namespace_Identifier;
+      First_Block    : U64;
+      Bytes          : Positive;
+      Result_Address : U64)
+   is
+      --  Counted in thirty-two bit words, one less than the real number,
+      --  like every other length in this specification.
+      Words : constant U32 := U32 (Bytes / 4) - 1;
+   begin
+      --  The thirteenth word selects which report and which zones: zero
+      --  asks for zone descriptors, and zero again asks for all states
+      --  rather than one.
+      Write_IO_Command
+        (Submission, Slot, Opcode_Zone_Receive, Identifier,
+         Namespace => Namespace,
+         DPTR1 => Result_Address,
+         CDW10 => U32 (First_Block and 16#FFFF_FFFF#),
+         CDW11 => U32 (Interfaces.Shift_Right (First_Block, 32)),
+         CDW12 => Words);
+   end Write_Zone_Report_Command;
+
+   ---------------------------------
+   -- Write_Zone_Action_Command --
+   ---------------------------------
+
+   procedure Write_Zone_Action_Command
+     (Submission  : Queue_Location;
+      Slot        : Natural;
+      Identifier  : U16;
+      Namespace   : Namespace_Identifier;
+      First_Block : U64;
+      Action      : Zone_Action;
+      All_Zones   : Boolean := False)
+   is
+      --  The action numbers are the specification's, and start at one
+      --  rather than zero, so the enumeration position will not serve.
+      Code : constant U32 :=
+        (case Action is
+            when Close   => 16#01#,
+            when Finish  => 16#02#,
+            when Open    => 16#03#,
+            when Reset   => 16#04#,
+            when Offline => 16#05#);
+      Sweep : constant U32 := (if All_Zones then 2 ** 8 else 0);
+   begin
+      Write_IO_Command
+        (Submission, Slot, Opcode_Zone_Send, Identifier,
+         Namespace => Namespace,
+         CDW10 => U32 (First_Block and 16#FFFF_FFFF#),
+         CDW11 => U32 (Interfaces.Shift_Right (First_Block, 32)),
+         CDW13 => Code or Sweep);
+   end Write_Zone_Action_Command;
+
+   ---------------------------------
+   -- Write_Zone_Append_Command --
+   ---------------------------------
+
+   procedure Write_Zone_Append_Command
+     (Submission : Queue_Location;
+      Slot       : Natural;
+      Identifier : U16;
+      Namespace  : Namespace_Identifier;
+      Zone_Start : U64;
+      Blocks     : Positive;
+      Address    : U64)
+   is
+   begin
+      --  The block named is the start of the zone, not where the data will
+      --  go. Where it goes is the controller's decision and it reports it
+      --  in the completion, which is the whole point of an append.
+      Write_IO_Command
+        (Submission, Slot, Opcode_Zone_Append, Identifier,
+         Namespace => Namespace,
+         DPTR1 => Address,
+         CDW10 => U32 (Zone_Start and 16#FFFF_FFFF#),
+         CDW11 => U32 (Interfaces.Shift_Right (Zone_Start, 32)),
+         CDW12 => U32 (Blocks - 1));
+   end Write_Zone_Append_Command;
+
+   -----------------------------------------
+   -- Write_Namespace_Attachment_Command --
+   -----------------------------------------
+
+   procedure Write_Namespace_Attachment_Command
+     (Submission   : Queue_Location;
+      Slot         : Natural;
+      Identifier   : U16;
+      Namespace    : Namespace_Identifier;
+      Attach       : Boolean;
+      List_Address : U64)
+   is
+   begin
+      Write_Admin_Command
+        (Submission, Slot, Opcode_Namespace_Attachment, Identifier,
+         Namespace => Namespace,
+         DPTR1 => List_Address,
+         CDW10 => (if Attach then 0 else 1));
+   end Write_Namespace_Attachment_Command;
+
+   --------------------------------
+   -- Write_Controller_List --
+   --------------------------------
+
+   procedure Write_Controller_List
+     (List : System.Address; Controller : U16)
+   is
+      Blank : Byte_Array (0 .. 4095) with Import, Address => List;
+   begin
+      Blank := (others => 0);
+      --  A count, then the identifiers. One entry here.
+      Put_16 (List, 0, 1);
+      Put_16 (List, 2, Controller);
+   end Write_Controller_List;
+
+   ------------------------
+   -- Reported_Zones --
+   ------------------------
+
+   function Reported_Zones (Report : System.Address) return U64 is
+      Bytes : Byte_Array (0 .. 7) with Import, Address => Report;
+      Total : U64 := 0;
+   begin
+      for Index in reverse Bytes'Range loop
+         Total := Interfaces.Shift_Left (Total, 8) or U64 (Bytes (Index));
+      end loop;
+      return Total;
+   end Reported_Zones;
+
+   ----------------------
+   -- Reported_Zone --
+   ----------------------
+
+   function Reported_Zone
+     (Report : System.Address; Index : Natural) return Zone_Description
+   is
+      At_Offset : constant Natural :=
+        Zone_Report_Header_Bytes + Index * Zone_Descriptor_Bytes;
+
+      function Field (Where : Natural) return U64;
+
+      function Field (Where : Natural) return U64 is
+         Bytes : Byte_Array (0 .. 7) with Import,
+           Address => Report + SSE.Storage_Offset (At_Offset + Where);
+         Total : U64 := 0;
+      begin
+         for Position in reverse Bytes'Range loop
+            Total :=
+              Interfaces.Shift_Left (Total, 8) or U64 (Bytes (Position));
+         end loop;
+         return Total;
+      end Field;
+
+      Status : Byte_Array (0 .. 0) with Import,
+        Address => Report + SSE.Storage_Offset (At_Offset + 1);
+      Coded  : constant Natural :=
+        Natural (Interfaces.Shift_Right (Status (0), 4));
+   begin
+      return
+        (Start         => Field (16),
+         Capacity      => Field (8),
+         Write_Pointer => Field (24),
+         State         =>
+           (case Coded is
+               when 1 => Empty,
+               when 2 => Implicitly_Open,
+               when 3 => Explicitly_Open,
+               when 4 => Closed,
+               when 13 => Read_Only,
+               when 14 => Full,
+               when 15 => Offline,
+               when others => Unknown));
+   end Reported_Zone;
+
+   ---------------------
+   -- Appended_At --
+   ---------------------
+
+   function Appended_At
+     (Queue : Queue_Location; Slot : Natural) return U64
+   is
+      Entry_At : constant Natural := Slot * Completion_Entry_Bytes;
+      Bytes    : Byte_Array (0 .. 7) with Import,
+        Address => Queue.Host + SSE.Storage_Offset (Entry_At);
+      Total    : U64 := 0;
+   begin
+      --  The first two words of a completion carry the block the append
+      --  landed on, which is the answer the command exists to give.
+      for Index in reverse Bytes'Range loop
+         Total := Interfaces.Shift_Left (Total, 8) or U64 (Bytes (Index));
+      end loop;
+      return Total;
+   end Appended_At;
 
    ---------------------------
    -- Completion_Result --

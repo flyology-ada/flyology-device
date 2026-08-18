@@ -78,8 +78,14 @@ devices=${FLYOLOGY_DEVICE_VM_DEVICES:-"
   -device edu
   -device edu
   -device pci-testdev
+  -device nvme-subsys,id=nvmesubsys,nqn=flyology-device
   -drive id=nvmedisk,file=$state/nvme.qcow2,if=none,format=qcow2
-  -device nvme,drive=nvmedisk,serial=$device_serial,msix_qsize=8
+  -drive id=nvmezoned,file=$state/nvme-zoned.qcow2,if=none,format=qcow2
+  -drive id=nvmespare,file=$state/nvme-spare.qcow2,if=none,format=qcow2
+  -device nvme,subsys=nvmesubsys,serial=$device_serial,msix_qsize=8
+  -device nvme-ns,drive=nvmedisk,nsid=1
+  -device nvme-ns,drive=nvmezoned,nsid=2,zoned=on,zoned.zone_size=1M,zoned.zone_capacity=1M
+  -device nvme-ns,drive=nvmespare,nsid=3,detached=on
   -netdev user,id=nic1,net=10.0.2.0/24,host=10.0.2.2
   -device e1000e,netdev=nic1,mac=$device_mac,romfile=
 "}
@@ -119,11 +125,20 @@ do_up () {
   [ -f "$state/overlay.qcow2" ] || qemu-img create -q -f qcow2 \
     -b "$state/$image_name" -F qcow2 "$state/overlay.qcow2" 20G
 
-  #  A backing file for the NVMe controller. Its contents never matter: the
-  #  tests drive the controller's registers and its admin queue, and never
-  #  read or write a block.
-  [ -f "$state/nvme.qcow2" ] || qemu-img create -q -f qcow2 \
-    "$state/nvme.qcow2" 64M
+  #  Three namespaces rather than one, because several NVMe command sets
+  #  exist only on a namespace configured for them. Namespace one is
+  #  ordinary and carries the block tests. Namespace two is zoned, which is
+  #  the only way the zone commands become more than entries in a
+  #  command-set table. Namespace three starts detached, so that attaching
+  #  it is something a test can do.
+  #
+  #  Reservations have no such option: QEMU's NVMe advertises the three
+  #  reservation commands and offers no configuration under which they
+  #  work, so they stay unexercised and the README says why.
+  for backing in nvme nvme-zoned nvme-spare; do
+    [ -f "$state/$backing.qcow2" ] || qemu-img create -q -f qcow2 \
+      "$state/$backing.qcow2" 64M
+  done
 
   rm -f "$short/console.sock"
 
