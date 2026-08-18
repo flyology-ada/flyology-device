@@ -179,6 +179,140 @@ package Flyology_VFIO_QEMU.E1000E is
    Transmit_Insert_CRC    : constant U8 := 2 ** 1;
    Transmit_Report_Status : constant U8 := 2 ** 3;
 
+   ---------------------------------------------------------------------
+   --  Deciding which frames to keep
+   ---------------------------------------------------------------------
+
+   --  A network controller spends most of its life refusing frames. On a
+   --  shared medium nearly everything it sees belongs to someone else, and
+   --  the filter is what keeps the host from being told about all of it.
+   --  Every register below is part of that decision.
+
+   --  Which tag protocol identifies a VLAN header. Set to 8100h for the
+   --  ordinary case; a device with the wrong value here sees tagged frames
+   --  as untagged ones with peculiar contents.
+   VLAN_Ether_Type_Register : constant := 16#00038#;
+
+   --  A four-thousand-and-ninety-six bit vector, one bit per multicast
+   --  address hash, spread over a hundred and twenty-eight registers.
+   Multicast_Table_Register : constant := 16#05200#;
+
+   --  How many registers the multicast table occupies.
+   Multicast_Table_Entries : constant := 128;
+
+   --  The same shape again, one bit per VLAN identifier.
+   VLAN_Filter_Table_Register : constant := 16#05600#;
+
+   --  How many registers the VLAN filter table occupies.
+   VLAN_Filter_Entries : constant := 128;
+
+   --  Whether to check the checksums of arriving frames, and where to
+   --  start.
+   Receive_Checksum_Register : constant := 16#05000#;
+
+   --  The largest frame the device will accept once long packets are
+   --  allowed. Without this a device with long packets enabled still drops
+   --  anything past its default.
+   Receive_Packet_Length_Register : constant := 16#05004#;
+
+   --  Set in the control register to have the device understand VLAN tags:
+   --  strip them from arriving frames into the descriptor, and insert them
+   --  into departing ones that ask.
+   Control_VLAN_Mode : constant U32 := 2 ** 30;
+
+   --  Set in the receive control register to keep every unicast frame
+   --  whatever its address. What a packet capture turns on and what a
+   --  driver should not.
+   Receive_Unicast_Promiscuous : constant U32 := 2 ** 3;
+
+   --  Set to keep every multicast frame without consulting the table.
+   Receive_Multicast_Promiscuous : constant U32 := 2 ** 4;
+
+   --  Set to accept frames longer than the standard maximum.
+   Receive_Long_Packets : constant U32 := 2 ** 5;
+
+   --  Set to consult the VLAN filter table. Clear, every tagged frame is
+   --  kept whatever its identifier, which is a filter that is switched off
+   --  rather than one that is refusing.
+   Receive_VLAN_Filter : constant U32 := 2 ** 18;
+
+   --  Which bits of a multicast address the hash is taken from.
+   --
+   --  Four choices, each shifting the twelve-bit window down the address by
+   --  a little. It exists so that two controllers sharing a medium can
+   --  disagree about which addresses collide.
+   --
+   --  @enum From_Bit_47 The highest twelve bits of the address
+   --  @enum From_Bit_46 One lower
+   --  @enum From_Bit_45 Two lower
+   --  @enum From_Bit_43 Four lower
+   type Multicast_Offset is
+     (From_Bit_47, From_Bit_46, From_Bit_45, From_Bit_43);
+
+   --  Puts a multicast offset in the receive control register's field.
+   --  @param Offset Which window to hash from
+   --  @return The bits to set
+   function Multicast_Offset_Bits (Offset : Multicast_Offset) return U32
+     is (Interfaces.Shift_Left (U32 (Multicast_Offset'Pos (Offset)), 12));
+
+   --  Set in the receive checksum register to check IP header checksums.
+   Checksum_Offload_IP : constant U32 := 2 ** 8;
+
+   --  Set to check TCP and UDP checksums.
+   Checksum_Offload_Transport : constant U32 := 2 ** 9;
+
+   --  Set in a receive descriptor's status when the frame carried a VLAN
+   --  tag, which the device has moved into the descriptor.
+   Descriptor_VLAN_Present : constant U8 := 2 ** 3;
+
+   --  Set when the device checked the transport checksum. Its verdict is in
+   --  the error byte, and reading that verdict without checking this first
+   --  is reading a field the device never wrote.
+   Descriptor_Transport_Checked : constant U8 := 2 ** 5;
+
+   --  Set when the device checked the IP header checksum.
+   Descriptor_IP_Checked : constant U8 := 2 ** 6;
+
+   --  Set when the frame reached the host through the hash filter rather
+   --  than an exact address match, so it may not be for this host at all:
+   --  the hash is lossy and the driver has to check again.
+   Descriptor_Inexact_Filter : constant U8 := 2 ** 7;
+
+   --  Set in a receive descriptor's errors when the transport checksum was
+   --  wrong.
+   Descriptor_Transport_Checksum_Error : constant U8 := 2 ** 5;
+
+   --  Set when the IP header checksum was wrong.
+   Descriptor_IP_Checksum_Error : constant U8 := 2 ** 6;
+
+   --  Set in a transmit descriptor's command to have the device compute and
+   --  insert a checksum.
+   Transmit_Insert_Checksum : constant U8 := 2 ** 2;
+
+   --  Set to have the device insert the descriptor's tag into the frame.
+   Transmit_Insert_VLAN : constant U8 := 2 ** 6;
+
+   --  Set in the receive control register to read the buffer size field on
+   --  a larger scale, which is how the field names sizes it has no room to
+   --  encode.
+   Receive_Buffer_Extend : constant U32 := 2 ** 25;
+
+   --  How to say a receive buffer size in the receive control register.
+   --
+   --  Two bits name four sizes, and a third bit changes which four. The
+   --  small sizes and the large ones therefore share encodings, so the same
+   --  two bits mean two hundred and fifty-six bytes or sixteen kibibytes
+   --  depending on a bit nine places away.
+   --
+   --  @param Bytes How large each buffer is
+   --  @return The bits to set, extension bit included
+   --  @exception Device_Misbehaved The size is not one the field can name
+   function Receive_Buffer_Size_Bits (Bytes : Positive) return U32;
+
+   --  A VLAN identifier: twelve bits of the tag, and the only part of it
+   --  the filter looks at.
+   type VLAN_Identifier is new Natural range 0 .. 4_095;
+
    --  How large a descriptor is, in bytes, in both rings.
    Descriptor_Bytes : constant := 16;
 
@@ -294,17 +428,113 @@ package Flyology_VFIO_QEMU.E1000E is
       Length   : Positive;
       Attempts : Positive := 20_000);
 
+   --  What the device should do to a frame on its way out.
+   --
+   --  Both of these have the device do work the host would otherwise do
+   --  itself, and both are places a driver can be wrong in a way that shows
+   --  up only on the wire: the frame leaves looking right to the code that
+   --  built it.
+   --
+   --  @field Insert_Checksum Have the device compute a checksum and write
+   --    it into the frame
+   --  @field Checksum_Start The first byte the sum covers
+   --  @field Checksum_Offset Where in the frame to write the result
+   --  @field Insert_VLAN Have the device add a VLAN tag
+   --  @field VLAN_Tag The tag to add
+   type Transmit_Options is record
+      Insert_Checksum : Boolean := False;
+      Checksum_Start  : Natural := 0;
+      Checksum_Offset : Natural := 0;
+      Insert_VLAN     : Boolean := False;
+      VLAN_Tag        : U16     := 0;
+   end record;
+
+   --  Hands one frame to the device, asking it to finish the frame off.
+   --
+   --  @param BAR The device's mapped registers
+   --  @param Ring Where the transmit ring lives
+   --  @param Slot Which descriptor to use
+   --  @param Frame The device address of the frame
+   --  @param Length How many bytes the frame holds
+   --  @param Options What the device should do to it
+   --  @param Attempts How many times to poll before giving up
+   --  @exception Device_Misbehaved The device did not take the frame
+   procedure Transmit
+     (BAR      : Regions.Window;
+      Ring     : Ring_Location;
+      Slot     : Natural;
+      Frame    : U64;
+      Length   : Positive;
+      Options  : Transmit_Options;
+      Attempts : Positive := 20_000);
+
+   --  Turns off every multicast address the device was keeping.
+   --  @param BAR The device's mapped registers
+   procedure Clear_Multicast_Table (BAR : Regions.Window);
+
+   --  Which bit of the multicast table an address falls on.
+   --
+   --  The hash is lossy by design: four thousand and ninety-six bits stand
+   --  for every multicast address there is, so addresses collide and a
+   --  driver allowing one may find it is receiving another. That is what
+   --  the inexact-filter bit in the descriptor is for.
+   --
+   --  @param Address The multicast address
+   --  @param Offset Which window to hash from
+   --  @return The bit, from zero
+   function Multicast_Bit
+     (Address : MAC_Address;
+      Offset  : Multicast_Offset := From_Bit_47) return Natural;
+
+   --  Starts or stops keeping frames for one multicast address.
+   --  @param BAR The device's mapped registers
+   --  @param Address The multicast address
+   --  @param Allowed Whether to keep frames for it
+   --  @param Offset Which window to hash from
+   procedure Set_Multicast
+     (BAR     : Regions.Window;
+      Address : MAC_Address;
+      Allowed : Boolean;
+      Offset  : Multicast_Offset := From_Bit_47);
+
+   --  Turns off every VLAN the device was keeping.
+   --  @param BAR The device's mapped registers
+   procedure Clear_VLAN_Filters (BAR : Regions.Window);
+
+   --  Starts or stops keeping frames tagged with one VLAN.
+   --  @param BAR The device's mapped registers
+   --  @param Identifier Which VLAN
+   --  @param Allowed Whether to keep its frames
+   procedure Set_VLAN_Filter
+     (BAR        : Regions.Window;
+      Identifier : VLAN_Identifier;
+      Allowed    : Boolean);
+
+   --  Whether the device is currently keeping frames for one VLAN.
+   --  @param BAR The device's mapped registers
+   --  @param Identifier Which VLAN
+   --  @return True when its frames are kept
+   function VLAN_Filter_Allows
+     (BAR : Regions.Window; Identifier : VLAN_Identifier) return Boolean;
+
    --  What arrived in one receive descriptor.
    --
    --  @field Arrived Whether the device has finished with this descriptor
    --  @field Length How many bytes the frame holds
    --  @field Complete Whether the frame ends in this descriptor
    --  @field Errors The device's error byte, zero when the frame is sound
+   --  @field Status The device's whole status byte
+   --  @field VLAN_Tag The tag the device stripped, when Status says there
+   --    was one
+   --  @field Checksum The frame checksum the device computed
    type Received_Frame is record
       Arrived  : Boolean;
       Length   : Natural;
       Complete : Boolean;
       Errors   : U8;
+      Status   : U8  := 0;
+      VLAN_Tag : U16 := 0;
+      Checksum : U16 := 0;
    end record;
 
    --  Reads one receive descriptor without waiting.

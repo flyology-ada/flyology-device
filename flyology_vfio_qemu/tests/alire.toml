@@ -18,6 +18,7 @@ executables = [
   "nvme_zoned_tests",
   "nvme_copy_tests",
   "nvme_blocks_tests",
+  "e1000e_filter_tests",
 ]
 
 [[depends-on]]

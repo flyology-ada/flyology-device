@@ -158,6 +158,14 @@ command here moves at most two mebibytes however large the controller says
 its own limit is. A transfer needing a chained list is refused rather than
 described wrongly.
 
+**A hash match is indistinguishable from an exact one.** The receive
+descriptor's passed-inexact-filter bit is never set: a frame that reached
+the host through the multicast hash carries the same status byte as one
+addressed to the device outright. A real driver relies on that bit to know
+it must check the address itself, because the hash has four thousand and
+ninety-six buckets for every multicast address there is and therefore
+collides. Here it cannot know.
+
 **Only the identify directive exists.** A controller must have the
 directive that describes the other directives, and QEMU's has nothing else
 to describe: streams are not implemented, so there is no directive that can

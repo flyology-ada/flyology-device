@@ -16,6 +16,7 @@ package body Flyology_VFIO_QEMU.E1000E is
 
    procedure Put_64 (Base : System.Address; At_Offset : Natural; Value : U64);
    procedure Put_16 (Base : System.Address; At_Offset : Natural; Value : U16);
+   procedure Put_8 (Base : System.Address; At_Offset : Natural; Value : U8);
    function Get_16 (Base : System.Address; At_Offset : Natural) return U16;
    function Get_8 (Base : System.Address; At_Offset : Natural) return U8;
 
@@ -37,6 +38,18 @@ package body Flyology_VFIO_QEMU.E1000E is
            U8 (Interfaces.Shift_Right (Value, 8 * Index) and 16#FF#);
       end loop;
    end Put_64;
+
+   ------------
+   -- Put_16 --
+   ------------
+
+   procedure Put_8 (Base : System.Address; At_Offset : Natural; Value : U8)
+   is
+      Cell : Byte_Array (0 .. 0) with Import,
+        Address => Base + SSE.Storage_Offset (At_Offset);
+   begin
+      Cell (0) := Value;
+   end Put_8;
 
    ------------
    -- Put_16 --
@@ -374,6 +387,24 @@ package body Flyology_VFIO_QEMU.E1000E is
       Length   : Positive;
       Attempts : Positive := 20_000)
    is
+   begin
+      Transmit (BAR, Ring, Slot, Frame, Length,
+                Options => (others => <>), Attempts => Attempts);
+   end Transmit;
+
+   ------------------
+   -- Transmit --
+   ------------------
+
+   procedure Transmit
+     (BAR      : Regions.Window;
+      Ring     : Ring_Location;
+      Slot     : Natural;
+      Frame    : U64;
+      Length   : Positive;
+      Options  : Transmit_Options;
+      Attempts : Positive := 20_000)
+   is
       At_Offset : constant Natural := Slot * Descriptor_Bytes;
       Polls     : Natural := 0;
    begin
@@ -387,12 +418,31 @@ package body Flyology_VFIO_QEMU.E1000E is
       Put_64 (Ring.Host, At_Offset, Frame);
       Put_16 (Ring.Host, At_Offset + 8, U16 (Length));
 
+      if Options.Insert_Checksum then
+         --  Where to start summing goes in one byte and where to put the
+         --  answer in another, and they are eleven bytes apart in the
+         --  descriptor with the command between them. Both are offsets from
+         --  the start of the frame, not from the start of the header being
+         --  summed, which is the reading that produces a checksum computed
+         --  over the right bytes and written into the wrong place.
+         Put_8 (Ring.Host, At_Offset + 10, U8 (Options.Checksum_Offset));
+         Put_8 (Ring.Host, At_Offset + 13, U8 (Options.Checksum_Start));
+      end if;
+
+      if Options.Insert_VLAN then
+         Put_16 (Ring.Host, At_Offset + 14, Options.VLAN_Tag);
+      end if;
+
       declare
          Command : Byte_Array (0 .. 0) with Import,
            Address => Ring.Host + SSE.Storage_Offset (At_Offset + 11);
       begin
          Command (0) := Transmit_End_Of_Packet or Transmit_Insert_CRC
-                        or Transmit_Report_Status;
+                        or Transmit_Report_Status
+                        or (if Options.Insert_Checksum
+                            then Transmit_Insert_Checksum else 0)
+                        or (if Options.Insert_VLAN
+                            then Transmit_Insert_VLAN else 0);
       end;
 
       --  The doorbell. A release store, because every byte of the
@@ -432,7 +482,10 @@ package body Flyology_VFIO_QEMU.E1000E is
         (Arrived  => (Status and Descriptor_Done) /= 0,
          Length   => Natural (Get_16 (Ring.Host, At_Offset + 8)),
          Complete => (Status and Descriptor_End_Of_Packet) /= 0,
-         Errors   => Get_8 (Ring.Host, At_Offset + 13));
+         Errors   => Get_8 (Ring.Host, At_Offset + 13),
+         Status   => Status,
+         VLAN_Tag => Get_16 (Ring.Host, At_Offset + 14),
+         Checksum => Get_16 (Ring.Host, At_Offset + 10));
    end Peek_Received;
 
    ----------------------
@@ -511,5 +564,133 @@ package body Flyology_VFIO_QEMU.E1000E is
       --  read meaningfully; the datasheet asks for a millisecond.
       Wait_Microseconds (2_000);
    end Reset;
+
+   -------------------------------------
+   -- Receive_Buffer_Size_Bits --
+   -------------------------------------
+
+   function Receive_Buffer_Size_Bits (Bytes : Positive) return U32 is
+   begin
+      case Bytes is
+         when 2048  => return 0;
+         when 1024  => return Interfaces.Shift_Left (1, 16);
+         when 512   => return Interfaces.Shift_Left (2, 16);
+         when 256   => return Interfaces.Shift_Left (3, 16);
+         when 16384 =>
+            return Interfaces.Shift_Left (1, 16) or Receive_Buffer_Extend;
+         when 8192  =>
+            return Interfaces.Shift_Left (2, 16) or Receive_Buffer_Extend;
+         when 4096  =>
+            return Interfaces.Shift_Left (3, 16) or Receive_Buffer_Extend;
+         when others =>
+            raise Device_Misbehaved with
+              "a receive buffer of" & Positive'Image (Bytes)
+              & " bytes is not a size the control register can name";
+      end case;
+   end Receive_Buffer_Size_Bits;
+
+   ---------------------------------
+   -- Clear_Multicast_Table --
+   ---------------------------------
+
+   procedure Clear_Multicast_Table (BAR : Regions.Window) is
+   begin
+      for Index in 0 .. Multicast_Table_Entries - 1 loop
+         Reg.Write_32
+           (BAR, Reg.Offset (Multicast_Table_Register + 4 * Index), 0);
+      end loop;
+   end Clear_Multicast_Table;
+
+   --------------------------
+   -- Multicast_Bit --
+   --------------------------
+
+   function Multicast_Bit
+     (Address : MAC_Address;
+      Offset  : Multicast_Offset := From_Bit_47) return Natural
+   is
+      --  The hash is taken from the last two bytes of the address, read as
+      --  one sixteen-bit number, shifted down by an amount the offset
+      --  chooses, and cut to twelve bits. Note that the choices are not
+      --  evenly spaced: three of them step by one and the last steps by
+      --  two, which is in the specification and looks like a mistake until
+      --  you check.
+      Shift : constant Natural :=
+        (case Offset is
+            when From_Bit_47 => 4,
+            when From_Bit_46 => 3,
+            when From_Bit_45 => 2,
+            when From_Bit_43 => 0);
+      Pair : constant U32 :=
+        Interfaces.Shift_Left (U32 (Address (6)), 8) or U32 (Address (5));
+   begin
+      return Natural (Interfaces.Shift_Right (Pair, Shift) and 16#FFF#);
+   end Multicast_Bit;
+
+   -------------------------
+   -- Set_Multicast --
+   -------------------------
+
+   procedure Set_Multicast
+     (BAR     : Regions.Window;
+      Address : MAC_Address;
+      Allowed : Boolean;
+      Offset  : Multicast_Offset := From_Bit_47)
+   is
+      Bit   : constant Natural := Multicast_Bit (Address, Offset);
+      Where : constant Reg.Offset :=
+        Reg.Offset (Multicast_Table_Register + 4 * (Bit / 32));
+      Mask  : constant U32 := Interfaces.Shift_Left (1, Bit mod 32);
+      Held  : constant U32 := Reg.Read_32 (BAR, Where);
+   begin
+      Reg.Write_32
+        (BAR, Where, (if Allowed then Held or Mask else Held and not Mask));
+   end Set_Multicast;
+
+   -------------------------------
+   -- Clear_VLAN_Filters --
+   -------------------------------
+
+   procedure Clear_VLAN_Filters (BAR : Regions.Window) is
+   begin
+      for Index in 0 .. VLAN_Filter_Entries - 1 loop
+         Reg.Write_32
+           (BAR, Reg.Offset (VLAN_Filter_Table_Register + 4 * Index), 0);
+      end loop;
+   end Clear_VLAN_Filters;
+
+   ---------------------------
+   -- Set_VLAN_Filter --
+   ---------------------------
+
+   procedure Set_VLAN_Filter
+     (BAR        : Regions.Window;
+      Identifier : VLAN_Identifier;
+      Allowed    : Boolean)
+   is
+      Where : constant Reg.Offset :=
+        Reg.Offset (VLAN_Filter_Table_Register + 4 * (Natural (Identifier) / 32));
+      Mask  : constant U32 :=
+        Interfaces.Shift_Left (1, Natural (Identifier) mod 32);
+      Held  : constant U32 := Reg.Read_32 (BAR, Where);
+   begin
+      Reg.Write_32
+        (BAR, Where, (if Allowed then Held or Mask else Held and not Mask));
+   end Set_VLAN_Filter;
+
+   ------------------------------
+   -- VLAN_Filter_Allows --
+   ------------------------------
+
+   function VLAN_Filter_Allows
+     (BAR : Regions.Window; Identifier : VLAN_Identifier) return Boolean
+   is
+      Where : constant Reg.Offset :=
+        Reg.Offset (VLAN_Filter_Table_Register + 4 * (Natural (Identifier) / 32));
+      Mask  : constant U32 :=
+        Interfaces.Shift_Left (1, Natural (Identifier) mod 32);
+   begin
+      return (Reg.Read_32 (BAR, Where) and Mask) /= 0;
+   end VLAN_Filter_Allows;
 
 end Flyology_VFIO_QEMU.E1000E;

@@ -111,8 +111,11 @@ procedure E1000E_Coverage_Tests is
       Described (16#040C8#, "Total Octets Sent", True),
       Described (16#04010#, "Missed Packet Count", True),
       Described (16#04030#, "Broadcast Received", True),
-      Described (16#05000#, "Multicast Table Array"),
-      Described (16#05038#, "VLAN Ethertype"),
+      Described (16#00038#, "VLAN Ethertype", True),
+      Described (16#05000#, "Receive Checksum Control", True),
+      Described (16#05004#, "Receive Packet Maximum", True),
+      Described (16#05200#, "Multicast Table Array", True),
+      Described (16#05600#, "VLAN Filter Table Array", True),
       Described (16#05400#, "Receive Address Low", True),
       Described (16#05404#, "Receive Address High", True),
       Described (16#00028#, "Flow Control Address Low"),
@@ -130,7 +133,7 @@ procedure E1000E_Coverage_Tests is
       else "52:54:00:12:34:56");
 
    --  What the functional suite reached when this floor was last reviewed.
-   Coverage_Floor : constant := 33;
+   Coverage_Floor : constant := 38;
 begin
    declare
       Where : constant String := Find (NIC.Vendor_ID, NIC.Device_ID);
