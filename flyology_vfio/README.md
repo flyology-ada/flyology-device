@@ -112,6 +112,29 @@ whole value the specification calls for.
 vfio-pci maps device regions uncacheable and offers no write-combining
 mapping, so no code path here can obtain one.
 
+## Waiting for an interrupt
+
+VFIO reduces an interrupt to a readable descriptor, which leaves one
+question the crate cannot answer for you: what a program does while it
+waits. The three reasonable answers are incompatible, and all three are
+legitimate.
+
+A poll-mode driver never waits at all — it reads a completion queue in a
+loop and takes no interrupt on the data path, which costs a core and buys
+the lowest latency available. A program with an event loop wants to suspend
+one task and let the others run. A program with neither wants to block.
+
+So `Interrupts.Waiter` is declared rather than fixed, for the same reason
+`Flyology_DMA.Mappers.Mapper` is: the answer belongs to the caller.
+`Blocking_Waiter` ships with the crate for programs that have no event loop,
+and is deliberately a duplicate of what `Flyology.IO.Wait` already does
+better — see `flyology_vfio_runtime` for the adapter that uses it. That
+adapter also carries one deadline across `EINTR` retries, which
+`Blocking_Waiter` does not.
+
+`Wait_For_Any` takes several descriptors and returns the lowest ready
+index, which is what a driver with one vector per queue needs.
+
 ## Interrupts that arrive exactly once
 
 A legacy pin interrupt is *automasked*: the kernel masks it the moment it

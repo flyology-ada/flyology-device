@@ -81,8 +81,6 @@ procedure NVMe_Tests is
    IO_Queue : constant Controller.Queue_Identifier := 1;
 
    --  Ada needs a named array type to iterate over a literal list.
-   type Feature_List is array (Positive range <>) of
-     Controller.Feature_Identifier;
    type Log_List is array (Positive range <>) of
      Controller.Log_Identifier;
    type Value_List is array (Positive range <>) of U32;

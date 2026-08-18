@@ -12,6 +12,7 @@ package body Flyology_VFIO.Interrupts is
    use type C.int;
    use type C.long;
    use type Interfaces.Integer_32;
+   use type Sys.Poll_Flags;
    use type Interfaces.Unsigned_32;
 
    --  The request sent to enable or disable interrupts.
@@ -35,6 +36,10 @@ package body Flyology_VFIO.Interrupts is
    --  The errno a device returns for an interrupt slot it does not fill.
    Invalid_Argument : constant := 22;
 
+   --  The errno poll reports when a signal arrived before anything was
+   --  ready. It is not a failure and the wait must be resumed.
+   Interrupted_System_Call : constant := 4;
+
    function Errno_Advice return String;
 
    ------------------
@@ -43,6 +48,105 @@ package body Flyology_VFIO.Interrupts is
 
    function Errno_Advice return String is
      (" (" & Sys.Errno_Text & ")");
+
+   ---------------------
+   -- Timeout_Millis --
+   ---------------------
+
+   --  poll counts milliseconds and reads a negative value as no limit,
+   --  which is the convention this crate adopted rather than inventing a
+   --  second one. Rounding up matters: a caller asking for a tenth of a
+   --  millisecond wants to wait a little, not to spin.
+   function Timeout_Millis (Timeout : Duration) return C.int is
+   begin
+      if Timeout < 0.0 then
+         return -1;
+      end if;
+      --  Spelled through Long_Float rather than fixed-point arithmetic,
+      --  which Ada would otherwise resolve to Duration and warn about.
+      return C.int
+        (Long_Float'Ceiling
+           (Long_Float (Duration'Min (Timeout, 86_400.0)) * 1_000.0));
+   end Timeout_Millis;
+
+   --------------
+   -- Wait_For --
+   --------------
+
+   overriding function Wait_For
+     (Self    : in out Blocking_Waiter;
+      Signal  : Event'Class;
+      Timeout : Duration) return Boolean
+   is
+      pragma Unreferenced (Self);
+      Watched : constant Descriptor_Array := [1 => Descriptor (Signal)];
+      Blocking : Blocking_Waiter;
+   begin
+      return Wait_For_Any (Blocking, Watched, Timeout) = 1;
+   end Wait_For;
+
+   ------------------
+   -- Wait_For_Any --
+   ------------------
+
+   overriding function Wait_For_Any
+     (Self    : in out Blocking_Waiter;
+      Signals : Descriptor_Array;
+      Timeout : Duration) return Natural
+   is
+      pragma Unreferenced (Self);
+
+      Requests : Sys.Poll_Request_Array (Signals'Range);
+      Ready    : C.int;
+   begin
+      if Signals'Length = 0 then
+         return 0;
+      end if;
+
+      for Index in Signals'Range loop
+         Requests (Index) :=
+           (FD      => Sys.Raw_FD (Signals (Index)),
+            Events  => Sys.Poll_Readable,
+            Revents => 0);
+      end loop;
+
+      --  A single deadline is not maintained across retries here, so an
+      --  interrupted wait restarts its timeout. That is a real difference
+      --  from Flyology.IO.Wait, which carries one deadline across EINTR,
+      --  and it is one of the reasons a program that has the runtime
+      --  should use the waiter in flyology_vfio_runtime instead of this.
+      loop
+         Ready := Sys.Poll
+           (Requests (Requests'First)'Address,
+            C.unsigned_long (Signals'Length),
+            Timeout_Millis (Timeout));
+
+         exit when Ready >= 0;
+         if Sys.Errno /= Interrupted_System_Call then
+            raise Interrupt_Error with
+              "waiting on" & Natural'Image (Signals'Length)
+              & " interrupt descriptor(s) failed" & Errno_Advice;
+         end if;
+      end loop;
+
+      if Ready = 0 then
+         return 0;
+      end if;
+
+      --  The lowest index wins, so a caller can order its descriptors by
+      --  what it would rather service first.
+      for Index in Requests'Range loop
+         if (Requests (Index).Revents and Sys.Poll_Readable) /= 0 then
+            return Index;
+         end if;
+      end loop;
+
+      --  Something became ready in a way that was not asked for: the
+      --  descriptor has been closed, or is not one.
+      raise Interrupt_Error with
+        "an interrupt descriptor reported an error rather than becoming"
+        & " readable, which usually means it has been closed";
+   end Wait_For_Any;
 
    --------------
    -- Describe --

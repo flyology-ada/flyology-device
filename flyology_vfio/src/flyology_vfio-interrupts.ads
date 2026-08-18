@@ -76,7 +76,9 @@ package Flyology_VFIO.Interrupts is
    --  Closes itself. Created non-blocking, so Take never waits; a driver
    --  that wants to block waits on the descriptor with whatever it already
    --  uses to wait on descriptors.
-   type Event is limited private;
+   --  Tagged in the visible part because the waiter below takes it
+   --  class-wide, which the partial view has to admit to.
+   type Event is tagged limited private;
 
    --  Creates an eventfd.
    --  @param Self The event to create
@@ -112,6 +114,87 @@ package Flyology_VFIO.Interrupts is
    --  @param Self The event to close
    procedure Close (Self : in out Event)
      with Post => not Is_Open (Self);
+
+   ---------------------------------------------------------------------
+   --  Waiting
+   ---------------------------------------------------------------------
+
+   --  A set of descriptors to wait on together.
+   type Descriptor_Array is array (Positive range <>) of Integer;
+
+   --  Something that can wait for a device to interrupt.
+   --
+   --  Declared rather than fixed, for the same reason Flyology_DMA declares
+   --  an abstract Mapper: the crate cannot answer this without answering a
+   --  question that belongs to the caller. What a program does while
+   --  waiting for a device is bound up with how it does everything else —
+   --  whether it has an event loop, whether it can afford a thread per
+   --  device, whether it would rather spin and never sleep at all.
+   --
+   --  The three answers are all legitimate and none of them is the crate's
+   --  to impose. A poll-mode driver never waits: it reads a completion
+   --  queue in a loop and takes no interrupt on the data path at all, which
+   --  costs a core and buys the lowest latency there is. A program with an
+   --  event loop wants to suspend one task and let the others run. A
+   --  program with neither wants to block and be done with it, which is
+   --  what Blocking_Waiter below does.
+   type Waiter is limited interface;
+
+   --  Waits for one device to interrupt.
+   --
+   --  @param Self The waiter
+   --  @param Signal The event the interrupt is delivered on
+   --  @param Timeout How long to wait; negative means no limit
+   --  @return True when the interrupt arrived, False on timeout
+   --  @exception Interrupt_Error The wait itself failed
+   --  The event is class-wide because a subprogram may not be a primitive
+   --  of two tagged types, and both Waiter and Event are tagged. It also
+   --  says the right thing: this dispatches on the waiter, never on the
+   --  event.
+   function Wait_For
+     (Self    : in out Waiter;
+      Signal  : Event'Class;
+      Timeout : Duration) return Boolean is abstract;
+
+   --  Waits for any of several devices, or several vectors of one.
+   --
+   --  Takes descriptors rather than events because an event is limited and
+   --  cannot be put in an array, and because a caller waiting on several
+   --  things usually holds them in several places.
+   --
+   --  @param Self The waiter
+   --  @param Signals The descriptors to watch
+   --  @param Timeout How long to wait; negative means no limit
+   --  @return The index of the descriptor that became ready, or zero on
+   --    timeout. The lowest index wins when several are ready at once.
+   --  @exception Interrupt_Error The wait itself failed
+   function Wait_For_Any
+     (Self    : in out Waiter;
+      Signals : Descriptor_Array;
+      Timeout : Duration) return Natural is abstract;
+
+   --  A waiter that blocks the calling task, and nothing else.
+   --
+   --  Shipped so that a program with no event loop of its own has something
+   --  that works. It is deliberately a duplicate: Flyology.IO.Wait already
+   --  does this, better, for both lightweight and native tasks, and a
+   --  program willing to depend on that runtime should use the waiter in
+   --  flyology_vfio_runtime instead. This exists so that willingness is not
+   --  a precondition for using this crate at all.
+   type Blocking_Waiter is limited new Waiter with null record;
+
+   overriding function Wait_For
+     (Self    : in out Blocking_Waiter;
+      Signal  : Event'Class;
+      Timeout : Duration) return Boolean;
+
+   overriding function Wait_For_Any
+     (Self    : in out Blocking_Waiter;
+      Signals : Descriptor_Array;
+      Timeout : Duration) return Natural;
+
+   --  No time limit, spelled as poll spells it.
+   Wait_Forever : constant Duration := -1.0;
 
    --  The most vectors this package will enable at once.
    Maximum_Vectors : constant := 64;

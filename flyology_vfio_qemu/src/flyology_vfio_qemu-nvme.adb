@@ -299,23 +299,31 @@ package body Flyology_VFIO_QEMU.NVMe is
    -------------------------------------------
 
    procedure Write_Create_Completion_Queue_Command
-     (Submission   : Queue_Location;
-      Slot         : Natural;
-      Identifier   : U16;
-      Queue_Number : Queue_Identifier;
-      Entries      : Positive;
-      Address      : U64)
+     (Submission       : Queue_Location;
+      Slot             : Natural;
+      Identifier       : U16;
+      Queue_Number     : Queue_Identifier;
+      Entries          : Positive;
+      Address          : U64;
+      Interrupt_Vector : Interrupt_Selection := No_Interrupt)
    is
+      --  Bit zero says the queue is one contiguous run of memory rather
+      --  than a list of pages. It is, because it was carved out of a single
+      --  mapped region. Bit one asks for interrupts, and the vector goes in
+      --  the top half of the same word.
+      Contiguous : constant U32 := 1;
+      Enabled    : constant U32 :=
+        (if Interrupt_Vector = No_Interrupt then 0 else 2);
+      Vector     : constant U32 :=
+        (if Interrupt_Vector = No_Interrupt then 0
+         else Interfaces.Shift_Left (U32 (Interrupt_Vector), 16));
    begin
-      --  Bit zero of the eleventh word says the queue is one contiguous
-      --  run of memory rather than a list of pages. It is, because it was
-      --  carved out of a single mapped region.
       Write_Admin_Command
         (Submission, Slot, Opcode_Create_Completion_Queue, Identifier,
          DPTR1 => Address,
          CDW10 => U32 (Queue_Number)
                   or Interfaces.Shift_Left (U32 (Entries - 1), 16),
-         CDW11 => 1);
+         CDW11 => Contiguous or Enabled or Vector);
    end Write_Create_Completion_Queue_Command;
 
    -------------------------------------------

@@ -148,6 +148,46 @@ is
    --  @return True on Linux
    function Platform_Supports_VFIO return Boolean;
 
+   --  One descriptor's readiness request, as poll takes it.
+   --
+   --  @field FD The descriptor to watch
+   --  @field Events What to watch for
+   --  @field Revents What happened, filled in by the kernel
+   --  The two flag fields are C shorts, which Ada gives no bitwise
+   --  operators; an unsigned sixteen-bit type has the same representation
+   --  and can be masked.
+   type Poll_Flags is mod 2 ** 16 with Size => 16;
+
+   type Poll_Request is record
+      FD      : Raw_FD;
+      Events  : Poll_Flags;
+      Revents : Poll_Flags;
+   end record
+     with Convention => C;
+
+   --  A set of requests, passed to poll as one array.
+   type Poll_Request_Array is
+     array (Positive range <>) of aliased Poll_Request
+     with Convention => C;
+
+   --  Watch for the descriptor becoming readable.
+   Poll_Readable : constant Poll_Flags := 1;
+
+   --  Waits for one of a set of descriptors to become ready.
+   --
+   --  The timeout is in milliseconds, and a negative value means no limit,
+   --  which is poll's own convention rather than this crate's.
+   --
+   --  @param Requests The descriptors to watch
+   --  @param Count How many of them
+   --  @param Timeout Milliseconds to wait, or negative for no limit
+   --  @return How many became ready, zero on timeout, or -1 with errno set
+   function Poll
+     (Requests : System.Address;
+      Count    : Interfaces.C.unsigned_long;
+      Timeout  : Interfaces.C.int) return Interfaces.C.int
+     with Import, Convention => C, External_Name => "poll";
+
    --  The current errno, and a sentence describing it.
    --  @return A string of the form "errno 22 (Invalid argument)"
    function Errno_Text return String;

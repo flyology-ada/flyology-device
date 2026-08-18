@@ -169,6 +169,12 @@ package Flyology_VFIO_QEMU.NVMe is
    --  descriptor types in Flyology_VFIO: several VFIO request numbers mean
    --  one thing on a container and another on a device.
 
+   --  Which MSI-X vector a completion queue signals, or none.
+   type Interrupt_Selection is new Integer range -1 .. 2_047;
+
+   --  Poll this queue rather than being interrupted about it.
+   No_Interrupt : constant Interrupt_Selection := -1;
+
    --  A command sent to the admin queue.
    type Admin_Opcode is new U8;
 
@@ -528,16 +534,23 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @param Submission Where the admin submission queue lives
    --  @param Slot Which entry to write, from zero
    --  @param Identifier The command identifier
+   --  Interrupts are off unless a vector is named. A completion queue with
+   --  interrupts enabled makes the controller signal the given MSI-X vector
+   --  when it posts a completion, which is what turns a polled driver into
+   --  one that can sleep.
+   --
    --  @param Queue_Number Which queue to create, from one
    --  @param Entries How many entries it holds
    --  @param Address Where it lives, as a device address
+   --  @param Interrupt_Vector Which MSI-X vector to signal, if any
    procedure Write_Create_Completion_Queue_Command
-     (Submission   : Queue_Location;
-      Slot         : Natural;
-      Identifier   : U16;
-      Queue_Number : Queue_Identifier;
-      Entries      : Positive;
-      Address      : U64)
+     (Submission       : Queue_Location;
+      Slot             : Natural;
+      Identifier       : U16;
+      Queue_Number     : Queue_Identifier;
+      Entries          : Positive;
+      Address          : U64;
+      Interrupt_Vector : Interrupt_Selection := No_Interrupt)
      with Pre => Submission.Kind = Admin
                  and then Queue_Number /= Admin_Queue;
 
