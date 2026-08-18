@@ -564,6 +564,23 @@ package Flyology_VFIO_QEMU.E1000E is
    --  link, and has to read twice.
    PHY_Link_Is_Up : constant U16 := 2 ** 2;
 
+   --  Stops the device using host memory.
+   --
+   --  A device is not finished with a ring because the program that
+   --  programmed it has stopped caring. It holds the ring's address in its
+   --  registers and keeps writing arriving frames there, and if the
+   --  mapping has been released in the meantime those writes land on an
+   --  address the IOMMU no longer translates. On a machine with an IOMMU
+   --  that is a fault in the log; on one without, it is a write into
+   --  whatever now owns that memory.
+   --
+   --  So this comes before the mapping goes away, not after. It is the
+   --  same ordering rule the mapping types enforce for their own lifetime
+   --  and the one thing they cannot enforce for the device's.
+   --
+   --  @param BAR The device's mapped registers
+   procedure Stop (BAR : Regions.Window);
+
    --  Asks for a link and waits until the device reports one.
    --
    --  Nothing before this needed it. A frame sent in loopback comes back
@@ -673,6 +690,89 @@ package Flyology_VFIO_QEMU.E1000E is
       Length   : Positive;
       Options  : Transmit_Options;
       Attempts : Positive := 20_000);
+
+   ---------------------------------------------------------------------
+   --  Letting the device cut a large payload into frames
+   ---------------------------------------------------------------------
+
+   --  Segmentation offload is the device doing what a transport layer would
+   --  otherwise do: it is handed one buffer larger than a frame together
+   --  with a template header, and it emits as many frames as that takes,
+   --  advancing the sequence number, adjusting the length, and recomputing
+   --  both checksums for each one.
+   --
+   --  It is the hardest thing on this device to get wrong quietly, and the
+   --  hardest to be sure of. A driver that miscounts a header length
+   --  produces frames that are individually well formed and collectively
+   --  nonsense, and nothing on the sending side notices. The receiving
+   --  stack does — by discarding them — which is why this is tested against
+   --  a peer and by counting what arrived rather than what was sent.
+
+   --  How many segmented packets the device has emitted. Clears when read.
+   Segmentation_Count_Register : constant := 16#040F8#;
+
+   --  How many it refused. Clears when read.
+   Segmentation_Failed_Register : constant := 16#040FC#;
+
+   --  Where a checksum lives and what it covers, and how to cut a payload.
+   --
+   --  Every offset is from the first byte of the frame. The two "end"
+   --  fields are the last byte covered rather than one past it, and zero
+   --  means "to the end of the frame" rather than "nothing" — which is the
+   --  reading that produces a checksum over no bytes at all.
+   --
+   --  @field IP_Start First byte the IP header checksum covers
+   --  @field IP_Offset Where the IP header checksum is written
+   --  @field IP_End Last byte it covers, or zero for the rest of the frame
+   --  @field Transport_Start First byte the transport checksum covers
+   --  @field Transport_Offset Where the transport checksum is written
+   --  @field Transport_End Last byte it covers, or zero for the rest
+   --  @field Header_Bytes How much of the buffer is template header
+   --  @field Payload_Bytes How much follows it, across every segment
+   --  @field Segment_Bytes The most payload one frame may carry
+   --  @field Over_IPv4 Whether to maintain the IPv4 header
+   --  @field Over_TCP Whether the transport is TCP rather than UDP
+   --  @field Segmenting Whether to cut the payload up at all
+   type Transmit_Context is record
+      IP_Start         : Natural := 0;
+      IP_Offset        : Natural := 0;
+      IP_End           : Natural := 0;
+      Transport_Start  : Natural := 0;
+      Transport_Offset : Natural := 0;
+      Transport_End    : Natural := 0;
+      Header_Bytes     : Natural := 0;
+      Payload_Bytes    : Natural := 0;
+      Segment_Bytes    : Natural := 0;
+      Over_IPv4        : Boolean := True;
+      Over_TCP         : Boolean := True;
+      Segmenting       : Boolean := True;
+   end record;
+
+   --  Hands the device a payload larger than a frame and waits for it.
+   --
+   --  Two descriptors are written, not one: a context descriptor saying how
+   --  to cut the buffer up and where the checksums go, and a data
+   --  descriptor pointing at the buffer. They are consecutive and the
+   --  doorbell is rung once, past both.
+   --
+   --  @param BAR The device's mapped registers
+   --  @param Ring Where the transmit ring lives
+   --  @param Slot Which descriptor to use for the context; the data
+   --    descriptor follows it
+   --  @param Frame The device address of the header followed by the payload
+   --  @param Context How to cut it up
+   --  @param Attempts How many times to poll before giving up
+   --  @exception Device_Misbehaved The device did not take the frame
+   procedure Transmit_Segmented
+     (BAR      : Regions.Window;
+      Ring     : Ring_Location;
+      Slot     : Natural;
+      Frame    : U64;
+      Context  : Transmit_Context;
+      Attempts : Positive := 20_000)
+     with Pre => Context.Header_Bytes > 0
+                 and then Context.Payload_Bytes > 0
+                 and then Context.Segment_Bytes > 0;
 
    --  Turns off every multicast address the device was keeping.
    --  @param BAR The device's mapped registers

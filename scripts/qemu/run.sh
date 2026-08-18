@@ -90,6 +90,15 @@ vm_pidfile="$state/qemu.pid"
 #  devices to vfio-pci by their identity, so a second controller of the same
 #  model would be bound too and the kernel would lose the interface this
 #  depends on.
+#
+#  Nothing else is on that hub, and QEMU's user networking in particular is
+#  kept off it. That stack does not merely translate: it believes it owns
+#  the addresses on its network, and a connection opened by hand from an
+#  address it has never leased is one it answers with a reset — sent from
+#  the address the connection came from, so it arrives looking exactly like
+#  the far end changing its mind. It is a plausible-looking reply from a
+#  third party that was never addressed, which is the hardest kind of
+#  interference to attribute.
 device_mac=${FLYOLOGY_DEVICE_VM_MAC:-52:54:00:12:34:56}
 peer_mac=${FLYOLOGY_DEVICE_VM_PEER_MAC:-52:54:00:12:34:57}
 device_serial=${FLYOLOGY_DEVICE_VM_NVME_SERIAL:-flyology0001}
@@ -106,8 +115,6 @@ devices=${FLYOLOGY_DEVICE_VM_DEVICES:-"
   -device nvme-ns,drive=nvmedisk,nsid=1
   -device nvme-ns,drive=nvmezoned,nsid=2,zoned=on,zoned.zone_size=1M,zoned.zone_capacity=1M
   -device nvme-ns,drive=nvmespare,nsid=3,detached=on
-  -netdev user,id=slirp,net=10.0.2.0/24,host=10.0.2.2
-  -netdev hubport,id=hubslirp,hubid=1,netdev=slirp
   -netdev hubport,id=hubwire,hubid=1
   -device e1000e,netdev=hubwire,mac=$device_mac,romfile=
   -netdev hubport,id=hubpeer,hubid=1

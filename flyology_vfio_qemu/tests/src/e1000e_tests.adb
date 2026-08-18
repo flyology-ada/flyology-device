@@ -63,10 +63,16 @@ procedure E1000E_Tests is
    Receive_Buffers_Offset : constant DMA.Byte_Count := 8192;
    Transmit_Frame_Offset  : constant DMA.Byte_Count := 65536;
 
-   --  The addresses QEMU's user networking uses: it answers as the gateway
-   --  and hands out the guest address below it.
-   Gateway_Address : constant array (1 .. 4) of U8 := [10, 0, 2, 2];
-   Our_Address     : constant array (1 .. 4) of U8 := [10, 0, 2, 15];
+   --  Who to ask, and who to say is asking.
+   --
+   --  The peer on the far side of the wire, rather than QEMU's own
+   --  translating stack. That stack answers address resolution too, and
+   --  relying on it made this test depend on something whose only job is to
+   --  translate — it terminates what it is sent and believes it owns every
+   --  address on its network, which turns out to matter a great deal to
+   --  anything trying to hold a conversation across it.
+   Peer_Address : constant array (1 .. 4) of U8 := [10, 0, 2, 50];
+   Our_Address  : constant array (1 .. 4) of U8 := [10, 0, 2, 99];
 
    --  What the machine was started with, read from the environment so that
    --  the harness and the test cannot disagree silently.
@@ -319,9 +325,10 @@ begin
                      and NIC.Transmit_Enable) /= 0,
                   "the transmitter is enabled");
 
-               --  An address resolution request for the gateway. QEMU's
-               --  user networking answers it, which is what makes both
-               --  directions testable without a second machine.
+               --  An address resolution request for the peer sharing this
+               --  wire, which is what makes both directions testable: a
+               --  reply has to have been produced by something that is not
+               --  this device.
                Frame_Bytes := (others => 0);
                for Index in 0 .. 5 loop
                   Frame_Bytes (Index) := 16#FF#;                --  broadcast
@@ -342,7 +349,7 @@ begin
                end loop;
                for Index in 0 .. 3 loop
                   Frame_Bytes (28 + Index) := Our_Address (Index + 1);
-                  Frame_Bytes (38 + Index) := Gateway_Address (Index + 1);
+                  Frame_Bytes (38 + Index) := Peer_Address (Index + 1);
                end loop;
 
                NIC.Transmit
@@ -393,7 +400,7 @@ begin
                         end if;
                      end loop;
                      for Index in 0 .. 3 loop
-                        if Reply (28 + Index) /= Gateway_Address (Index + 1)
+                        if Reply (28 + Index) /= Peer_Address (Index + 1)
                         then
                            From_Gateway := False;
                         end if;
@@ -595,6 +602,9 @@ begin
                         "no frame arrived with a bad checksum");
                   end;
                end;
+
+               --  Before the mapping goes away, not after.
+               NIC.Stop (BAR);
             end;
 
             Config.Disable_Bus_Mastering (Device);

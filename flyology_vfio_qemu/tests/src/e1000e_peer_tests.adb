@@ -41,6 +41,7 @@
 --  this device hashes frames arriving from outside and not frames it sent
 --  itself.
 
+with Ada.Calendar;
 with Ada.Environment_Variables;
 with Ada.Exceptions;
 with Ada.Streams;
@@ -139,17 +140,33 @@ procedure E1000E_Peer_Tests is
    --  have to be walked past rather than mistaken for a failure.
    type Expected is
      (Address_Reply, Echo_Reply, Port_Unreachable, Connection_Refused,
-      Socket_Answer);
+      Socket_Answer, Handshake_Answer, Stream_Data, Any_Stream);
 
    package Sockets renames Flyology.IO.Sockets;
+   use type Sockets.Selector_Status;
    use type Ada.Streams.Stream_Element_Offset;
 
    --  Where the socket half of this test listens, and the port the raw half
    --  sends from. Both are chosen here rather than left to the system so
    --  that a datagram going missing cannot be mistaken for one arriving
    --  somewhere unexpected.
-   Echo_Port  : constant Sockets.Port := 7_777;
-   Reply_Port : constant := 5_002;
+   Echo_Port   : constant Sockets.Port := 7_777;
+   Stream_Port : constant Sockets.Port := 7_778;
+   Reply_Port  : constant := 5_002;
+
+   --  A fresh source port every run, the way a real client picks one.
+   --
+   --  A fixed one looks tidier and is wrong: the connection this test opens
+   --  outlives the test, because the far end keeps it a while after the
+   --  near end has stopped existing. The next run reuses the same four
+   --  addresses and ports, and its synchronise is answered not with an
+   --  agreement but with a bare acknowledgement of the *previous*
+   --  connection's sequence number — which is a stack defending itself
+   --  against exactly this, and looks from here like the listener having
+   --  gone deaf.
+   Stream_From : constant U16 :=
+     40_000 + U16 (Natural (Ada.Calendar.Seconds (Ada.Calendar.Clock))
+                   mod 20_000);
 
    --  What the echo puts in front of what it was sent. A plain echo cannot
    --  be told apart from the request returning some other way — a device
@@ -160,9 +177,38 @@ procedure E1000E_Peer_Tests is
    --  The socket half. It binds before the raw half sends anything, and
    --  stops when asked, because a task still waiting on a socket would keep
    --  the program alive after its checks had finished.
+   --  A count both halves of this test can reach. An entry would have done
+   --  as well until the receiving loop moved into a nested procedure, where
+   --  an accept is not allowed; a protected object has no such rule and
+   --  answers while the task is busy rather than between its turns.
+   protected Tally is
+      procedure Add (Count : Natural);
+      function Total return Natural;
+      procedure Ask_To_Stop;
+      function Stopping return Boolean;
+   private
+      Seen  : Natural := 0;
+      Asked : Boolean := False;
+   end Tally;
+
+   protected body Tally is
+      procedure Add (Count : Natural) is
+      begin
+         Seen := Seen + Count;
+      end Add;
+
+      function Total return Natural is (Seen);
+
+      procedure Ask_To_Stop is
+      begin
+         Asked := True;
+      end Ask_To_Stop;
+
+      function Stopping return Boolean is (Asked);
+   end Tally;
+
    task Echo_Socket is
       entry Listening;
-      entry Stop;
    end Echo_Socket;
 
    task body Echo_Socket is
@@ -204,23 +250,109 @@ procedure E1000E_Peer_Tests is
             when others => null;
          end;
 
-         select
-            accept Stop;
-            Asked := True;
-         else
-            null;
-         end select;
+         Asked := Tally.Stopping;
       end loop;
 
       Sockets.Close_Socket (Socket);
    exception
       when others =>
-         select
-            accept Stop;
-         or
-            delay 5.0;
-         end select;
+         while not Tally.Stopping loop
+            delay 0.1;
+         end loop;
    end Echo_Socket;
+
+   --  The connection half. Same idea as the datagram one and a much
+   --  stronger claim: a connection has to be established before a byte can
+   --  be sent, and establishing one means the other end agreed to a
+   --  sequence number this test chose and acknowledged it.
+   --
+   --  It counts what it has received as well as echoing it, because the
+   --  segmentation check below is about how much arrived rather than what
+   --  came back: the device is handed one buffer and asked to turn it into
+   --  frames, and the question is whether every byte of it reached a socket.
+   task Echo_Stream is
+      entry Listening;
+   end Echo_Stream;
+
+   task body Echo_Stream is
+      Server   : Sockets.Socket_Type;
+      Accepted : Sockets.Socket_Type;
+      Buffer   : Ada.Streams.Stream_Element_Array (1 .. 4_096);
+      Reply    : Ada.Streams.Stream_Element_Array (1 .. 4_200);
+      Last     : Ada.Streams.Stream_Element_Offset;
+      Sent     : Ada.Streams.Stream_Element_Offset;
+      From     : Sockets.Endpoint;
+      Status   : Sockets.Selector_Status;
+      Asked    : Boolean := False;
+
+      Give_Up : Boolean := False;
+
+      procedure Serve_One;
+
+      procedure Serve_One is
+         --  A receive that timed out and a peer that has finished both
+         --  produce no bytes, and this interface cannot tell them apart.
+         --  Treating the first as the second closes the connection under a
+         --  peer that was only being slow — which is what happened here,
+         --  and what the other end reported as a reset rather than as an
+         --  echo. So an empty read is patience, and only a long run of them
+         --  is an ending.
+         Quiet : Natural := 0;
+      begin
+         while Quiet < 60 and then not Give_Up loop
+            begin
+               Sockets.Receive_Socket (Accepted, Buffer, Last);
+               if Last >= Buffer'First then
+                  Quiet := 0;
+                  Tally.Add (Natural (Last));
+                  for Index in Marker'Range loop
+                     Reply (Ada.Streams.Stream_Element_Offset
+                              (Index - Marker'First + 1)) :=
+                       Character'Pos (Marker (Index));
+                  end loop;
+                  Reply (Marker'Length + 1 .. Marker'Length + Last) :=
+                    Buffer (1 .. Last);
+                  Sockets.Send_Socket
+                    (Accepted, Reply (1 .. Marker'Length + Last), Sent);
+               else
+                  Quiet := Quiet + 1;
+               end if;
+            exception
+               when others => Quiet := Quiet + 1;
+            end;
+
+            Give_Up := Tally.Stopping;
+         end loop;
+      end Serve_One;
+   begin
+      Sockets.Create_Socket (Server, Sockets.IPv4, Sockets.Socket_Stream);
+      Sockets.Set_Socket_Option
+        (Server, (Name => Sockets.Reuse_Address, Enabled => True));
+      Sockets.Bind_Socket
+        (Server, Sockets.Network_Endpoint (Sockets.Any_IPv4, Stream_Port));
+      Sockets.Listen_Socket (Server);
+      accept Listening;
+
+      while not Asked loop
+         Sockets.Accept_Socket (Server, Accepted, From, 0.25, Status);
+         if Status = Sockets.Completed then
+            Sockets.Set_Socket_Option
+              (Accepted,
+               (Name => Sockets.Receive_Timeout, Timeout => 0.25));
+            Serve_One;
+            Sockets.Close_Socket (Accepted);
+         end if;
+
+         Asked := Give_Up or else Tally.Stopping;
+      end loop;
+
+      Sockets.Close_Socket (Server);
+   exception
+      when others =>
+         while not Tally.Stopping loop
+            delay 0.1;
+         end loop;
+   end Echo_Stream;
 begin
    declare
       Where : constant String := Find (NIC.Vendor_ID, NIC.Device_ID);
@@ -283,7 +415,10 @@ begin
 
                Everything : array (1 .. Scratch_Bytes) of U8
                  with Import, Volatile, Address => Host;
-               Frame : array (0 .. 1023) of U8
+               --  Large enough for a segmented payload and its template
+               --  header. Everything else here fits in a frame; the one
+               --  thing that does not is the whole point of the last check.
+               Frame : array (0 .. 4_095) of U8
                  with Import, Volatile, Address => At_Host (Frame_At);
 
                --  Both queues' buffers, addressed as one block because the
@@ -498,6 +633,71 @@ begin
                   return Finish_IPv4 (17, Length);
                end Build_To_Socket;
 
+               --  One TCP segment on the connection to the listener,
+               --  with whatever flags and payload are asked for. Sequence
+               --  and acknowledgement numbers are the caller's business,
+               --  because getting them right is the thing being checked.
+               function Build_Segment
+                 (Flags   : U16;
+                  Sequence : U32;
+                  Acknowledge : U32;
+                  Payload : String := "") return Positive
+               is
+                  Length : constant Natural := 20 + Payload'Length;
+               begin
+                  Start_Frame (16#0800#);
+                  Put_16_At (Trans_At, Stream_From);
+                  Put_16_At (Trans_At + 2, U16 (Stream_Port));
+                  Put_32_At (Trans_At + 4, Sequence);
+                  Put_32_At (Trans_At + 8, Acknowledge);
+                  --  Five words of header in the high nibble; a zero there
+                  --  is a segment every stack discards.
+                  Put_16_At (Trans_At + 12, 16#5000# or Flags);
+                  Put_16_At (Trans_At + 14, 8_192);
+                  for Index in Payload'Range loop
+                     Frame (Trans_At + 20 + Index - Payload'First) :=
+                       U8 (Character'Pos (Payload (Index)));
+                  end loop;
+                  Put_16_At
+                    (Trans_At + 16,
+                     Folded (Word_Sum (Trans_At, Length)
+                             + Pseudo_Header (6, U32 (Length))));
+                  return Finish_IPv4 (6, Length);
+               end Build_Segment;
+
+               --  A template header followed by more payload than one frame
+               --  can carry. The header is what every emitted frame starts
+               --  from and the device rewrites the parts that differ; the
+               --  length and both checksums are left as they are, because
+               --  they cannot be right for every segment and the device is
+               --  being asked to work them out.
+               function Build_Large
+                 (Sequence : U32; Acknowledge : U32; Payload : Natural)
+                  return Positive
+               is
+                  Length : constant Natural := 20 + Payload;
+               begin
+                  Start_Frame (16#0800#);
+                  Put_16_At (Trans_At, Stream_From);
+                  Put_16_At (Trans_At + 2, U16 (Stream_Port));
+                  Put_32_At (Trans_At + 4, Sequence);
+                  Put_32_At (Trans_At + 8, Acknowledge);
+                  Put_16_At (Trans_At + 12, 16#5018#);
+                  Put_16_At (Trans_At + 14, 8_192);
+                  for Index in 0 .. Payload - 1 loop
+                     Frame (Trans_At + 20 + Index) :=
+                       U8 (Character'Pos ('a') + U8 (Index mod 26));
+                  end loop;
+                  Frame (IP_At) := 16#45#;
+                  Put_16_At (IP_At + 2, U16 (20 + Length));
+                  Put_16_At (IP_At + 4, 16#ABCD#);
+                  Frame (IP_At + 8) := 64;
+                  Frame (IP_At + 9) := 6;
+                  Put_32_At (IP_At + 12, Our_IP);
+                  Put_32_At (IP_At + 16, Peer_IP);
+                  return IP_At + 20 + Length;
+               end Build_Large;
+
                function Build_SYN return Positive is
                   Length : constant := 20;
                begin
@@ -562,6 +762,28 @@ begin
                         return Word (12) = 16#0800#
                           and then Byte (IP_At + 9) = 6
                           and then (Byte (Trans_At + 13) and 16#04#) /= 0;
+                     when Handshake_Answer =>
+                        --  Synchronise and acknowledge together, from the
+                        --  port the listener is on. Anything else on this
+                        --  connection is not the second step.
+                        return Word (12) = 16#0800#
+                          and then Byte (IP_At + 9) = 6
+                          and then Word (Trans_At) = U16 (Stream_Port)
+                          and then Word (Trans_At + 2) = Stream_From
+                          and then (Byte (Trans_At + 13) and 16#12#)
+                                   = 16#12#;
+                     when Stream_Data =>
+                        --  Anything carrying payload on that connection.
+                        return Word (12) = 16#0800#
+                          and then Byte (IP_At + 9) = 6
+                          and then Word (Trans_At) = U16 (Stream_Port)
+                          and then Word (Trans_At + 2) = Stream_From
+                          and then Natural (Word (IP_At + 2)) > 20 + 20;
+                     when Any_Stream =>
+                        return Word (12) = 16#0800#
+                          and then Byte (IP_At + 9) = 6
+                          and then Word (Trans_At) = U16 (Stream_Port)
+                          and then Word (Trans_At + 2) = Stream_From;
                      when Socket_Answer =>
                         --  A datagram back to the port the raw half sent
                         --  from, which is a reply and not the request
@@ -594,7 +816,13 @@ begin
 
                   for Attempt in 1 .. 400 loop
                      for Each in NIC.Queue_Index loop
-                        loop
+                        --  At most one pass over the ring per attempt.
+                        --  Draining until a descriptor is not ready sounds
+                        --  equivalent and is not: every descriptor handed
+                        --  back becomes one the device may fill again
+                        --  immediately, so on a busy wire the loop has
+                        --  always got one more and never comes back.
+                        for Walked in 1 .. Ring_Slots loop
                            Seen := NIC.Peek_Received
                              (RX (Each), RX_Slot (Each),
                               (if Extended then NIC.Extended
@@ -722,7 +950,14 @@ begin
                   --  All the way up to a socket, and back
                   ---------------------------------------------------
 
-                  Echo_Socket.Listening;
+                  select
+                     Echo_Socket.Listening;
+                  or
+                     delay 10.0;
+                     Harness.Skip
+                       ("the socket exchange",
+                        "the datagram socket never came up");
+                  end select;
                   Exchange (Build_To_Socket, Socket_Answer,
                             Found, Queue, Slot);
                   Harness.Check
@@ -758,6 +993,196 @@ begin
                   end if;
 
                   ---------------------------------------------------
+                  --  A connection, established by hand
+                  ---------------------------------------------------
+
+                  select
+                     Echo_Stream.Listening;
+                  or
+                     delay 10.0;
+                     Harness.Skip
+                       ("the connection exchange",
+                        "the listener never came up");
+                  end select;
+                  declare
+                     Ours   : constant U32 := 16#0001_0000#;
+                     Theirs : U32 := 0;
+                     Sent_Text : constant String := "over-tcp";
+                     Next_Sequence : U32 := 16#0001_0001#;
+                  begin
+                     Exchange (Build_Segment (16#02#, Ours, 0),
+                               Handshake_Answer, Found, Queue, Slot);
+                     Harness.Check
+                       (Found,
+                        "a listener this program opened answered a"
+                        & " synchronise built by hand, so the first step of"
+                        & " a connection completed across the wire");
+
+                     if Found then
+                        declare
+                           function Long (Where : Natural) return U32
+                           is (Interfaces.Shift_Left
+                                 (U32 (Arrived (Queue, Slot, Where)), 24)
+                               or Interfaces.Shift_Left
+                                    (U32 (Arrived (Queue, Slot, Where + 1)),
+                                     16)
+                               or Interfaces.Shift_Left
+                                    (U32 (Arrived (Queue, Slot, Where + 2)),
+                                     8)
+                               or U32 (Arrived (Queue, Slot, Where + 3)));
+                           Acknowledged : constant U32 :=
+                             Long (Trans_At + 8);
+                        begin
+                           Theirs := Long (Trans_At + 4);
+                           Harness.Check
+                             (Acknowledged = Ours + 1,
+                              "and acknowledged exactly the sequence number"
+                              & " this test chose, plus one — so the number"
+                              & " went out, was understood, and came back"
+                              & " incremented rather than echoed");
+                        end;
+
+                        --  Third step, then data on the same segment's
+                        --  heels. A connection is open at this point and
+                        --  every byte after it is ordinary traffic.
+                        Send (Build_Segment (16#10#, Ours + 1, Theirs + 1));
+                        Exchange
+                          (Build_Segment (16#18#, Ours + 1, Theirs + 1,
+                                          Sent_Text),
+                           Stream_Data, Found, Queue, Slot);
+                        Harness.Check
+                          (Found,
+                           "and data sent on it came back, having been"
+                           & " read out of a socket and written into it"
+                           & " again");
+                        if not Found then
+                           Harness.Note
+                             ("the socket had seen"
+                              & Natural'Image (Tally.Total)
+                              & " bytes by then");
+                           Exchange (Build_Segment (16#18#, Ours + 1,
+                                                    Theirs + 1, "again"),
+                                     Any_Stream, Found, Queue, Slot);
+                           if Found then
+                              Harness.Note
+                                ("a segment came back with flags 0x"
+                                 & Hex_16 (U16 (Arrived (Queue, Slot,
+                                                         Trans_At + 13)))
+                                 & " and total length"
+                                 & Natural'Image
+                                     (Natural (Arrived (Queue, Slot,
+                                                        IP_At + 2)) * 256
+                                      + Natural (Arrived (Queue, Slot,
+                                                          IP_At + 3))));
+                           else
+                              Harness.Note ("nothing came back at all");
+                           end if;
+                           Found := False;
+                        end if;
+
+                        if Found then
+                           declare
+                              Payload_At : constant Natural := Trans_At + 20;
+                              Marked : Boolean := True;
+                           begin
+                              for Index in Marker'Range loop
+                                 if Arrived
+                                      (Queue, Slot,
+                                       Payload_At + Index - Marker'First)
+                                   /= U8 (Character'Pos (Marker (Index)))
+                                 then
+                                    Marked := False;
+                                 end if;
+                              end loop;
+                              Harness.Check
+                                (Marked,
+                                 "carrying what the socket put in front of"
+                                 & " it");
+                           end;
+
+                           ---------------------------------------------
+                           --  More than one frame's worth, in one go
+                           ---------------------------------------------
+
+                           declare
+                              Bulk : constant := 4_000;
+                              Segment : constant := 1_000;
+                              Before : constant Natural := Tally.Total;
+                              Length : constant Positive :=
+                                Build_Large (Ours + 1
+                                             + U32 (Sent_Text'Length),
+                                             Theirs + 1, Bulk);
+                              pragma Unreferenced (Length);
+                              Cutting : constant NIC.Transmit_Context :=
+                                (IP_Start         => IP_At,
+                                 IP_Offset        => IP_At + 10,
+                                 IP_End           => 0,
+                                 Transport_Start  => Trans_At,
+                                 Transport_Offset => Trans_At + 16,
+                                 Transport_End    => 0,
+                                 Header_Bytes     => Trans_At + 20,
+                                 Payload_Bytes    => Bulk,
+                                 Segment_Bytes    => Segment,
+                                 others           => <>);
+                              Arrived_Bytes : Natural := 0;
+                           begin
+                              Reg.Write_32
+                                (BAR, NIC.Segmentation_Count_Register, 0);
+                              NIC.Transmit_Segmented
+                                (BAR, TX, TX_Slot, At_Device (Frame_At),
+                                 Cutting);
+                              TX_Slot := (TX_Slot + 2) mod Ring_Slots;
+
+                              for Attempt in 1 .. 400 loop
+                                 Arrived_Bytes := Tally.Total - Before;
+                                 exit when Arrived_Bytes >= Bulk;
+                                 delay 0.005;
+                              end loop;
+
+                              Harness.Note
+                                ("the socket received"
+                                 & Natural'Image (Arrived_Bytes)
+                                 & " of" & Natural'Image (Bulk)
+                                 & " bytes; the device counted"
+                                 & U32'Image
+                                     (Reg.Read_32
+                                        (BAR,
+                                         NIC.Segmentation_Count_Register))
+                                 & " segmented packets and"
+                                 & U32'Image
+                                     (Reg.Read_32
+                                        (BAR,
+                                         NIC.Segmentation_Failed_Register))
+                                 & " refusals");
+
+                              Next_Sequence :=
+                                Ours + 1 + U32 (Sent_Text'Length)
+                                + U32 (Bulk);
+                              Harness.Check
+                                (Arrived_Bytes >= Bulk,
+                                 "every byte of a payload four times larger"
+                                 & " than a frame reached the socket, from"
+                                 & " one buffer and one template header:"
+                                 & " the device cut it up, advanced the"
+                                 & " sequence number for each piece, fixed"
+                                 & " both checksums, and the receiving"
+                                 & " stack accepted the lot — which it does"
+                                 & " not do for a segment that is wrong in"
+                                 & " any of those");
+                           end;
+                        end if;
+
+                        --  Tear the connection down with the sequence
+                        --  number the far end is expecting. A reset that
+                        --  names any other one is not believed — it is
+                        --  answered with an acknowledgement instead, and
+                        --  the connection stays up.
+                        Send (Build_Segment (16#04#, Next_Sequence,
+                                             Theirs + 1));
+                     end if;
+                  end;
+
+                  ---------------------------------------------------
                   --  Which queue a frame from outside lands on
                   ---------------------------------------------------
 
@@ -771,12 +1196,29 @@ begin
                   --  having the checksum handed to it, and a driver that
                   --  leaves the checksum on has quietly asked for one
                   --  queue.
+                  --  Which descriptor layout the device writes cannot be
+                  --  changed under a running receiver: the rings hold
+                  --  descriptors of the old shape and the device would
+                  --  start writing the new one into them. So the receiver
+                  --  is stopped, the layout changed, and the rings built
+                  --  again from the beginning.
+                  Reg.Write_32 (BAR, NIC.Receive_Control_Register, 0);
                   Reg.Write_32
                     (BAR, NIC.Receive_Filter_Control_Register,
                      NIC.Extended_Descriptors);
                   Reg.Write_32
                     (BAR, NIC.Receive_Checksum_Register,
                      NIC.Checksum_In_Descriptor_Off);
+                  for Each in NIC.Queue_Index loop
+                     NIC.Start_Receiving
+                       (BAR, RX (Each), Buffer_Device (Each, 0),
+                        Buffer_Bytes);
+                     RX_Slot (Each) := 0;
+                  end loop;
+                  Reg.Write_32
+                    (BAR, NIC.Receive_Control_Register,
+                     NIC.Receive_Enable or NIC.Receive_Broadcast
+                     or NIC.Receive_Strip_CRC);
                   Extended := True;
 
                   NIC.Set_Hash_Key (BAR, 16#5A5A_1234#);
@@ -804,6 +1246,9 @@ begin
                      end if;
                   end loop;
                end if;
+
+               --  Before the mapping goes away, not after.
+               NIC.Stop (BAR);
             end;
 
             Config.Disable_Bus_Mastering (Device);
@@ -811,12 +1256,29 @@ begin
       end;
    end;
 
-   Echo_Socket.Stop;
+   --  A timed call rather than a plain one. A task that has already fallen
+   --  over will never reach its accept, and a plain call would then wait
+   --  for it for ever — turning a reported failure into a run that never
+   --  finishes and says nothing at all, which is what happened here.
+   Tally.Ask_To_Stop;
    Harness.Report ("e1000e_peer_tests");
 
 exception
    when Error : Device_Not_Available =>
+      Tally.Ask_To_Stop;
       Harness.Skip
         ("every check", Ada.Exceptions.Exception_Message (Error));
+      Harness.Report ("e1000e_peer_tests");
+
+   --  Anything else has to stop the tasks too. A program whose main body
+   --  gave up while a task is still waiting on a socket does not exit: it
+   --  waits for that task for ever, and a failure that would have been
+   --  reported in a line becomes a run that says nothing and never ends.
+   when Error : others =>
+      Tally.Ask_To_Stop;
+      Harness.Check
+        (False,
+         "the run ended early: "
+         & Ada.Exceptions.Exception_Message (Error));
       Harness.Report ("e1000e_peer_tests");
 end E1000E_Peer_Tests;

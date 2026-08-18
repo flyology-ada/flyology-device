@@ -158,6 +158,14 @@ command here moves at most two mebibytes however large the controller says
 its own limit is. A transfer needing a chained list is refused rather than
 described wrongly.
 
+**Segmentation offload works, and is the one thing here a loopback could
+never have checked.** The device is handed one buffer of four thousand
+bytes with a single template header and emits as many frames as that takes,
+advancing the sequence number and recomputing both checksums for each. All
+four thousand bytes arrive in a socket. A driver that miscounts the header
+length produces frames that are individually well formed and collectively
+nonsense, and nothing on the sending side notices.
+
 **Receive-side scaling and receive checksum offload are mutually
 exclusive.** The hash goes in the four descriptor bytes the checksum would
 occupy, so the device reports one or the other. Scaling therefore requires
@@ -174,6 +182,14 @@ the first queue, so scaling cannot be observed without a peer on the wire.
 which is where a reader who knows the field is one bit wide will put it,
 and which yields a table that reads back exactly as written and steers
 nothing.
+
+**The coverage probe leaves the controller writing into host memory.**
+Probing Doorbell Buffer Config tells the controller where to keep a copy of
+its doorbells, and it writes there after every ring from then on. The
+memory goes away at the end of the test and the controller does not, so the
+guest logs a burst of IOMMU translation faults. They are the IOMMU doing
+its job and no result depends on them, but a probe that changes the device
+rather than asking it a question is worth knowing about.
 
 **A hash match is indistinguishable from an exact one.** The receive
 descriptor's passed-inexact-filter bit is never set: a frame that reached

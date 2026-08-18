@@ -692,6 +692,9 @@ begin
                        (BAR, NIC.Receive_Control_Register, Filter);
                   end;
                end;
+
+               --  Before the mapping goes away, not after.
+               NIC.Stop (BAR);
             end;
 
             Config.Disable_Bus_Mastering (Device);

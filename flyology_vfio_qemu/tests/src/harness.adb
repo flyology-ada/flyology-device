@@ -20,6 +20,7 @@ package body Harness is
       if not Condition then
          Failures := Failures + 1;
          Ada.Text_IO.Put_Line ("  FAIL  " & Label);
+         Ada.Text_IO.Flush;
       end if;
    end Check;
 
@@ -65,6 +66,7 @@ package body Harness is
    begin
       Skipped := Skipped + 1;
       Ada.Text_IO.Put_Line ("  SKIP  " & Label & ": " & Because);
+      Ada.Text_IO.Flush;
    end Skip;
 
    ----------
@@ -74,6 +76,7 @@ package body Harness is
    procedure Note (Text : String) is
    begin
       Ada.Text_IO.Put_Line ("  ..    " & Text);
+      Ada.Text_IO.Flush;
    end Note;
 
    ------------

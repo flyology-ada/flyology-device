@@ -17,6 +17,7 @@ package body Flyology_VFIO_QEMU.E1000E is
    procedure Put_64 (Base : System.Address; At_Offset : Natural; Value : U64);
    procedure Put_16 (Base : System.Address; At_Offset : Natural; Value : U16);
    procedure Put_8 (Base : System.Address; At_Offset : Natural; Value : U8);
+   procedure Put_32 (Base : System.Address; At_Offset : Natural; Value : U32);
    function Get_16 (Base : System.Address; At_Offset : Natural) return U16;
    function Get_8 (Base : System.Address; At_Offset : Natural) return U8;
 
@@ -42,6 +43,21 @@ package body Flyology_VFIO_QEMU.E1000E is
    ------------
    -- Put_16 --
    ------------
+
+   procedure Put_32 (Base : System.Address; At_Offset : Natural; Value : U32)
+   is
+      Cell : Byte_Array (0 .. 3) with Import,
+        Address => Base + SSE.Storage_Offset (At_Offset);
+   begin
+      for Index in Cell'Range loop
+         Cell (Index) :=
+           U8 (Interfaces.Shift_Right (Value, 8 * Index) and 16#FF#);
+      end loop;
+   end Put_32;
+
+   -----------
+   -- Put_8 --
+   -----------
 
    procedure Put_8 (Base : System.Address; At_Offset : Natural; Value : U8)
    is
@@ -597,6 +613,117 @@ package body Flyology_VFIO_QEMU.E1000E is
       --  read meaningfully; the datasheet asks for a millisecond.
       Wait_Microseconds (2_000);
    end Reset;
+
+   --------------------------------
+   -- Transmit_Segmented --
+   --------------------------------
+
+   procedure Transmit_Segmented
+     (BAR      : Regions.Window;
+      Ring     : Ring_Location;
+      Slot     : Natural;
+      Frame    : U64;
+      Context  : Transmit_Context;
+      Attempts : Positive := 20_000)
+   is
+      Context_At : constant Natural := Slot * Descriptor_Bytes;
+      Data_At    : constant Natural :=
+        ((Slot + 1) mod Ring.Count) * Descriptor_Bytes;
+      Total      : constant Natural :=
+        Context.Header_Bytes + Context.Payload_Bytes;
+      Polls      : Natural := 0;
+
+      --  Bit twenty-nine says a descriptor is not the legacy kind, and bit
+      --  twenty says it carries data. A descriptor with the first and not
+      --  the second is a context descriptor: the same sixteen bytes, read
+      --  as something else entirely.
+      Extended    : constant U32 := 2 ** 29;
+      Carries_Data : constant U32 := 2 ** 20;
+      Report_Done : constant U32 := 2 ** 27;
+      Last_Of_It  : constant U32 := 2 ** 24;
+      Add_FCS     : constant U32 := 2 ** 25;
+      Cut_It_Up   : constant U32 := 2 ** 26;
+      Maintain_IP  : constant U32 := 2 ** 25;
+      Maintain_TCP : constant U32 := 2 ** 24;
+   begin
+      declare
+         Blank : Byte_Array (0 .. Descriptor_Bytes - 1) with Import,
+           Address => Ring.Host + SSE.Storage_Offset (Context_At);
+      begin
+         Blank := (others => 0);
+      end;
+
+      Put_8 (Ring.Host, Context_At, U8 (Context.IP_Start));
+      Put_8 (Ring.Host, Context_At + 1, U8 (Context.IP_Offset));
+      Put_16 (Ring.Host, Context_At + 2, U16 (Context.IP_End));
+      Put_8 (Ring.Host, Context_At + 4, U8 (Context.Transport_Start));
+      Put_8 (Ring.Host, Context_At + 5, U8 (Context.Transport_Offset));
+      Put_16 (Ring.Host, Context_At + 6, U16 (Context.Transport_End));
+
+      Put_32
+        (Ring.Host, Context_At + 8,
+         U32 (Context.Payload_Bytes)
+         or Extended
+         or (if Context.Segmenting then Cut_It_Up else 0)
+         or (if Context.Over_IPv4 then Maintain_IP else 0)
+         or (if Context.Over_TCP then Maintain_TCP else 0));
+
+      Put_8 (Ring.Host, Context_At + 13, U8 (Context.Header_Bytes));
+      Put_16 (Ring.Host, Context_At + 14, U16 (Context.Segment_Bytes));
+
+      declare
+         Blank : Byte_Array (0 .. Descriptor_Bytes - 1) with Import,
+           Address => Ring.Host + SSE.Storage_Offset (Data_At);
+      begin
+         Blank := (others => 0);
+      end;
+
+      Put_64 (Ring.Host, Data_At, Frame);
+      Put_32
+        (Ring.Host, Data_At + 8,
+         U32 (Total)
+         or Extended or Carries_Data
+         or Report_Done or Last_Of_It or Add_FCS
+         or (if Context.Segmenting then Cut_It_Up else 0));
+
+      --  The options byte, which is where a data descriptor asks for the
+      --  checksums the context descriptor described. Segmentation without
+      --  them produces frames with the template's checksum repeated.
+      Put_8
+        (Ring.Host, Data_At + 13,
+         (if Context.Over_IPv4 then 1 else 0)
+         or (if Context.Over_TCP or else Context.Segmenting then 2 else 0));
+
+      Reg.Write_Release_32
+        (BAR, Reg.Offset (Transmit_Ring_Base (Ring.Queue) + Ring_Tail),
+         U32 ((Slot + 2) mod Ring.Count));
+
+      loop
+         exit when (Get_8 (Ring.Host, Data_At + 12) and Descriptor_Done) /= 0;
+         Polls := Polls + 1;
+         Wait_Microseconds (100);
+         if Polls >= Attempts then
+            raise Device_Misbehaved with
+              "the device did not report finishing with a segmented"
+              & " transmit after" & Natural'Image (Attempts) & " polls";
+         end if;
+      end loop;
+   end Transmit_Segmented;
+
+   --------------
+   -- Stop --
+   --------------
+
+   procedure Stop (BAR : Regions.Window) is
+   begin
+      Reg.Write_32 (BAR, Receive_Control_Register, 0);
+      Reg.Write_32 (BAR, Transmit_Control_Register, 0);
+      --  Read something back, so the writes have reached the device before
+      --  the caller releases the memory it was writing into.
+      if Reg.Read_Acquire_32 (BAR, Status_Register) = 16#FFFF_FFFF# then
+         raise Device_Misbehaved with "the device stopped answering";
+      end if;
+   end Stop;
 
    --------------------------
    -- Wait_For_Link --

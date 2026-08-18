@@ -506,6 +506,9 @@ begin
                         & " the partner register holds nothing yet");
                   end if;
                end;
+
+               --  Before the mapping goes away, not after.
+               NIC.Stop (BAR);
             end;
 
             Config.Disable_Bus_Mastering (Device);
