@@ -6,23 +6,35 @@ use type Interfaces.Unsigned_16;
 use type Interfaces.Unsigned_64;
 use type Interfaces.Unsigned_32;
 
---  An Intel 82574L gigabit controller, as QEMU emulates it.
+--  An Intel 82574L gigabit controller, as QEMU emulates it, driven as a
+--  network interface.
 --
---  This device is here for its shape rather than for what it does. It is
---  the first thing in this repository with more than one base address
---  register, the first with a region the kernel decorates with a
---  capability chain, and the first offering more than one interrupt
---  vector. Those are three parts of Flyology_VFIO that nothing else
---  exercises.
+--  This device is here first for its shape. It is the only thing in this
+--  repository with more than one base address register, the only one with
+--  a region the kernel decorates with a capability chain, and the only one
+--  offering more than one interrupt vector. Those are three parts of
+--  Flyology_VFIO that nothing else exercises.
 --
---  It also offers a corpus worth having. Its receive address registers hold
---  a MAC address chosen on the command line that started the machine, so a
---  value picked outside this program can be recovered through MMIO and
---  compared. That is a stronger check than any self-consistency test: a
---  register window that reads plausible-looking rubbish fails it.
+--  It is then driven far enough to carry traffic: receive and transmit
+--  descriptor rings in mapped memory, the link brought up, a frame sent and
+--  a reply received. It also reaches two surfaces behind the register
+--  window — the physical-layer chip, which is a second device on a small
+--  bus with its own ready bit, and the non-volatile configuration memory
+--  the device powers up from.
 --
---  There is no packet handling here, no ring, and no link management. This
---  reads identity, resets the device, and stops.
+--  It offers the best corpus available in a virtual machine. Its receive
+--  address registers hold a MAC address chosen on the command line that
+--  started the machine, so a value picked outside this program can be
+--  recovered through MMIO and compared — and recovered a second time, by a
+--  different path, out of the configuration memory. A register window
+--  reading plausible-looking rubbish fails that; a self-consistency check
+--  would not.
+--
+--  What is deliberately not here: everything above a single frame. There is
+--  no checksum or segmentation offload, no receive-side scaling, no VLAN
+--  or multicast filtering, no flow control, and no interrupt-driven
+--  receive — the rings are polled. Those are a network driver, and this is
+--  a harness.
 package Flyology_VFIO_QEMU.E1000E is
 
    package Regions renames Flyology_VFIO.Regions;

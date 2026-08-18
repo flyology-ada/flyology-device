@@ -16,13 +16,21 @@ with Interfaces;
 --  walks its page tables when a device dereferences an address, so an IOVA
 --  programmed incorrectly produces a translation fault rather than quietly
 --  working. That is the property most worth testing and the hardest to test
---  any other way, and QEMU's educational device has a DMA engine that will
---  follow whatever address it is given.
+--  any other way. Four devices exercise it between them, from an
+--  educational DMA engine that follows a single address to a storage
+--  controller that reaches three separately programmed ones in a single
+--  operation.
+--
+--  It also covers shapes the interface has to handle and the simplest
+--  devices never show: a sixty-four bit base address register, several
+--  regions on one device, regions the kernel decorates with a capability
+--  chain, more than one interrupt vector, and a container holding more
+--  than one group.
 --
 --  What it validates about hardware: nothing. There is no bus timing here,
---  no errata, no write-combining, no MSI-X table with a sparse-mmap hole,
---  no 64-bit or multi-BAR layouts. A result from this crate is a result
---  about the binding, not about a device.
+--  no errata, no write-combining, and no silicon to have errata in the
+--  first place. A result from this crate is a result about the binding,
+--  not about a device.
 --
 --  This is a harness, not a driver. Nothing here is meant to be depended on
 --  by anything that has to work.

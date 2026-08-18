@@ -9,6 +9,7 @@ Both crates here are experimental. Neither has driven real hardware.
 | --- | --- |
 | [`flyology_dma`](flyology_dma/) | Hugepage-backed regions, IOVA management, and buffer pools whose handles carry both the host and device addresses of the same bytes |
 | [`flyology_vfio`](flyology_vfio/) | The Linux VFIO userspace interface: container, group and device lifecycle, BAR mapping, MMIO access, and the `Mapper` implementation that closes the loop with `flyology_dma` |
+| [`flyology_vfio_qemu`](flyology_vfio_qemu/) | A bring-up harness driving QEMU's virtual PCI devices through the other two, so that they are tested against a device rather than only against the kernel's refusals |
 
 The repository root is not a crate. Each crate is a peer with its own
 manifest, project file, tests, and scripts, and is released independently.
@@ -28,11 +29,17 @@ the region and pool code noticing.
 
 ## What is deliberately absent
 
-No driver, no descriptor format, no packet. `flyology_vfio` gets you a mapped
-BAR, a working DMA mapping, and an interrupt, and stops. Descriptor rings are
-device-shaped, and a generic ring designed before any real device exists
-would be wrong; they belong to driver crates, and are worth revisiting only
-once two drivers exist and their needs can be compared.
+No driver, no descriptor format, no packet — in the two lower crates.
+`flyology_vfio` gets you a mapped BAR, a working DMA mapping, and an
+interrupt, and stops. A generic descriptor ring designed before any real
+device existed would have been wrong, so there isn't one; the rings that
+exist live in `flyology_vfio_qemu`, shaped by the devices that needed them.
+
+That crate is where device knowledge is allowed and the only place it is.
+It is a peer rather than a layer, and nothing depends on it: it exists so
+that the two below it are tested against a device that follows the
+addresses they hand out, which is the one thing neither can establish about
+itself.
 
 ## Getting started
 

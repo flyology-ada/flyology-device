@@ -7,29 +7,39 @@ use type Interfaces.Unsigned_32;
 use type Interfaces.Unsigned_64;
 with System;
 
---  An NVMe controller, driven far enough to make it answer.
+--  An NVMe controller, driven as a disk.
 --
 --  This device is here for what it makes the layers below prove. edu
 --  demonstrates that a device can follow an I/O virtual address; an NVMe
---  controller demonstrates it four times over in one operation, in both
---  directions, against addresses the controller was told about through
---  three separate registers rather than one.
+--  controller demonstrates it several times over in a single operation, in
+--  both directions, against addresses it was told about through three
+--  separate registers rather than one.
 --
 --  Bringing it up: the controller is disabled, its admin queues are pointed
 --  at memory the IOMMU has been programmed for, and it is enabled again. It
 --  then reads its submission queue by DMA, writes its completion queue by
---  DMA, and writes the four kibibytes of Identify data by DMA. A driver
---  that got any of those addresses wrong gets silence and a controller that
---  never becomes ready.
+--  DMA, and writes whatever the command asked for by DMA. A driver that got
+--  any of those addresses wrong gets silence and a controller that never
+--  becomes ready.
+--
+--  From there it is used rather than merely interrogated: the namespace is
+--  described, an I/O queue pair is created, and blocks are written and read
+--  back. The command set reaches Flush, Compare, Verify, Write Zeroes,
+--  Dataset Management and Abort, and transfers larger than two pages go
+--  through a pointer list, because one command carries only two pointers
+--  and getting the third page wrong drops it silently.
 --
 --  It also brings register widths this repository had not touched: a
 --  sixty-four bit base address register, sixty-four bit registers within
 --  it, and a doorbell whose position depends on a stride the controller
---  itself reports.
+--  reports itself.
 --
---  What is deliberately not here: namespaces, I/O queues, and reading or
---  writing a single block. Those are a storage driver, and this is a
---  harness. The admin queue is the smallest thing that proves the point.
+--  What is deliberately not here: everything a storage driver would need
+--  and a harness does not. There is no namespace management, no more than
+--  one queue pair, no interrupt-driven completion — the queues are polled —
+--  and no attempt to be fast. Flyology_VFIO_QEMU.NVMe exists to make the
+--  layers below it prove themselves, not to store anything anyone wants
+--  back.
 package Flyology_VFIO_QEMU.NVMe is
 
    package DMA renames Flyology_DMA;

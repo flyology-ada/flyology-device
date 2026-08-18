@@ -19,10 +19,14 @@ driver crates join as peers rather than as children of an existing one.
   group and device lifecycle, PCI BAR mapping, MMIO register access, and
   interrupt delivery. Implements the `Mapper` interface that `flyology_dma`
   declares.
+- `flyology_vfio_qemu` — a bring-up harness that drives QEMU's virtual PCI
+  devices through the other two. It is not a library anything should depend
+  on: it exists to make the layers below it prove themselves against a
+  device, which neither can do alone.
 
-The dependency runs one way, `flyology_vfio -> flyology_dma`, and there is no
-cycle. `flyology_dma` sits at the bottom and depends on nothing in this
-repository.
+The dependency runs one way, `flyology_vfio_qemu -> flyology_vfio ->
+flyology_dma`, and there is no cycle. `flyology_dma` sits at the bottom and
+depends on nothing in this repository.
 
 If a change to `flyology_dma` seems to need VFIO, reshape the interface
 instead. That interface is what lets other backends — VFIO no-IOMMU mode,
@@ -31,10 +35,15 @@ place without the region and pool code noticing.
 
 ## Boundaries
 
-- Neither crate contains a device driver, a descriptor format, or a packet.
-  `flyology_vfio` gets you a mapped BAR, a working DMA mapping, and an
-  interrupt, and stops. A virtio or ixgbe identifier in either crate's
-  sources means the boundary has been breached.
+- Neither `flyology_dma` nor `flyology_vfio` contains a device driver, a
+  descriptor format, or a packet. `flyology_vfio` gets you a mapped BAR, a
+  working DMA mapping, and an interrupt, and stops. A device identifier in
+  either crate's sources means the boundary has been breached.
+- `flyology_vfio_qemu` is where device knowledge is allowed, and it is the
+  only place. It holds register maps, descriptor rings and command sets for
+  the devices it drives, because that is what driving them requires. It is
+  a peer of the other two rather than a layer of them, and nothing depends
+  on it.
 - Descriptor rings are deliberately absent. They are device-shaped, and a
   generic ring designed before any real device exists would be wrong.
   Revisit only once two drivers exist and their needs can be compared.
@@ -42,8 +51,9 @@ place without the region and pool code noticing.
 ## Naming
 
 - Each crate uses a single underscored root package: `Flyology_DMA` with
-  children such as `Flyology_DMA.Regions`, and `Flyology_VFIO` with children
-  such as `Flyology_VFIO.Thin`.
+  children such as `Flyology_DMA.Regions`, `Flyology_VFIO` with children
+  such as `Flyology_VFIO.Thin`, and `Flyology_VFIO_QEMU` with one child per
+  device it drives.
 - Never introduce a `Flyology` parent unit in either crate. A parent package
   here collides when the crate is used alongside the Flyology runtime, which
   is why every standalone crate in this ecosystem uses a single underscored
@@ -117,6 +127,9 @@ passing test in the container says nothing about hugepages.
 
 - Each crate is tagged and released independently through an immutable
   annotated tag named `<crate>/v<version>`, for example `flyology_dma/v0.1.0`.
+  `flyology_vfio_qemu` is a harness rather than a library and has no reason
+  to be released at all unless something outside this repository comes to
+  depend on it.
 - Before tagging, set that crate's `alire.toml` to the exact stable version,
   replace development constraints and path pins with stable constraints, and
   run its required checks plus `alr show`. The manifest name and version must
