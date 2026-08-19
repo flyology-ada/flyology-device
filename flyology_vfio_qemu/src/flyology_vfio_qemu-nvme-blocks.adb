@@ -170,7 +170,7 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
      (Self       : in out Volume;
       BAR        : Regions.Window;
       Scratch    : System.Address;
-      Scratch_At : U64;
+      Scratch_At : Device_Address;
       Bytes      : Positive;
       Namespace  : Namespace_Identifier := 1)
    is
@@ -180,8 +180,8 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
       function At_Host (Offset : Natural) return System.Address
       is (Scratch + SSE.Storage_Offset (Offset));
 
-      function At_Device (Offset : Natural) return U64
-      is (Scratch_At + U64 (Offset));
+      function At_Device (Offset : Natural) return Device_Address
+      is (Scratch_At + Device_Address (Offset));
    begin
       Self.Opened := False;
       Self.Namespace := Namespace;

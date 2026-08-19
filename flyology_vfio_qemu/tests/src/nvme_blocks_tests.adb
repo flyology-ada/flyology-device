@@ -117,7 +117,7 @@ begin
                Volume : Disk.Volume;
             begin
                Disk.Open
-                 (Volume, BAR, Host, U64 (Window_Base), Scratch_Bytes);
+                 (Volume, BAR, Host, Window_Base, Scratch_Bytes);
 
                Harness.Check
                  (Volume.Is_Open,

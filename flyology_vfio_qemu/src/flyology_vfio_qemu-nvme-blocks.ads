@@ -62,7 +62,7 @@ package Flyology_VFIO_QEMU.NVMe.Blocks is
      (Self       : in out Volume;
       BAR        : Regions.Window;
       Scratch    : System.Address;
-      Scratch_At : U64;
+      Scratch_At : Device_Address;
       Bytes      : Positive;
       Namespace  : Namespace_Identifier := 1)
      with Pre => Bytes >= Minimum_Scratch_Bytes;
@@ -236,9 +236,9 @@ private
       IO_Sub       : Queue_Location;
       IO_Comp      : Queue_Location;
       List_Host    : System.Address := System.Null_Address;
-      List_At      : U64 := 0;
+      List_At      : Device_Address := 0;
       Buffer_Host  : System.Address := System.Null_Address;
-      Buffer_At    : U64 := 0;
+      Buffer_At    : Device_Address := 0;
       Buffer_Bytes : Positive := 4096;
       --  Each queue's next slot, kept inside the ring, and the phase bit
       --  its next completion will carry.

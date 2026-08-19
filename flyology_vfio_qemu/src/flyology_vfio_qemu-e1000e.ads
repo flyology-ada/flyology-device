@@ -615,7 +615,7 @@ package Flyology_VFIO_QEMU.E1000E is
    --  @field Queue Which of the device's queues this ring is
    type Ring_Location is record
       Host   : System.Address;
-      Device : U64;
+      Device : Device_Address;
       Count  : Positive;
       Queue  : Queue_Index := 0;
    end record;
@@ -633,7 +633,7 @@ package Flyology_VFIO_QEMU.E1000E is
    procedure Start_Receiving
      (BAR          : Regions.Window;
       Ring         : Ring_Location;
-      Buffers      : U64;
+      Buffers      : Device_Address;
       Buffer_Bytes : Positive := Receive_Buffer_Bytes);
 
    --  Points the device at a transmit ring and enables transmitting.
@@ -660,7 +660,7 @@ package Flyology_VFIO_QEMU.E1000E is
      (BAR      : Regions.Window;
       Ring     : Ring_Location;
       Slot     : Natural;
-      Frame    : U64;
+      Frame    : Device_Address;
       Length   : Positive;
       Attempts : Positive := 20_000);
 
@@ -699,7 +699,7 @@ package Flyology_VFIO_QEMU.E1000E is
      (BAR      : Regions.Window;
       Ring     : Ring_Location;
       Slot     : Natural;
-      Frame    : U64;
+      Frame    : Device_Address;
       Length   : Positive;
       Options  : Transmit_Options;
       Attempts : Positive := 20_000);
@@ -780,7 +780,7 @@ package Flyology_VFIO_QEMU.E1000E is
      (BAR      : Regions.Window;
       Ring     : Ring_Location;
       Slot     : Natural;
-      Frame    : U64;
+      Frame    : Device_Address;
       Context  : Transmit_Context;
       Attempts : Positive := 20_000)
      with Pre => Context.Header_Bytes > 0
@@ -886,7 +886,7 @@ package Flyology_VFIO_QEMU.E1000E is
      (BAR    : Regions.Window;
       Ring   : Ring_Location;
       Slot   : Natural;
-      Buffer : U64);
+      Buffer : Device_Address);
 
    --  Reads the first receive address out of the device.
    --

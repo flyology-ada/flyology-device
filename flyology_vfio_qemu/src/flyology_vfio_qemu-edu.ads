@@ -106,7 +106,7 @@ package Flyology_VFIO_QEMU.Edu is
    --  A transfer to the device names a destination in this range, and a
    --  transfer from the device names a source in it. Addresses outside it
    --  are rejected by the device.
-   Device_Buffer_Base : constant U64 := 16#4_0000#;
+   Device_Buffer_Base : constant Device_Address := 16#4_0000#;
 
    --  How large the device's own buffer is.
    Device_Buffer_Size : constant U64 := 4096;
@@ -132,7 +132,7 @@ package Flyology_VFIO_QEMU.Edu is
    --  IOVAs a driver may use, alongside the IOMMU's own input address size
    --  and the ranges the platform reserves. Transfer refuses an address
    --  that does not fit rather than letting it be masked.
-   Maximum_DMA_Address : constant U64 := 2 ** 28 - 1;
+   Maximum_DMA_Address : constant Device_Address := 2 ** 28 - 1;
 
    ---------------------------------------------------------------------
    --  Operations
@@ -255,8 +255,8 @@ package Flyology_VFIO_QEMU.Edu is
    --    an address is wider than the device can emit
    procedure Transfer
      (BAR         : Regions.Window;
-      Source      : U64;
-      Destination : U64;
+      Source      : Device_Address;
+      Destination : Device_Address;
       Count       : U64;
       Direction   : Transfer_Direction;
       Announce    : Boolean := False;

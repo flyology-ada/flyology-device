@@ -152,6 +152,14 @@ controller-scope feature named with a namespace identifier is refused, and a
 per-namespace feature without one likewise. Both refusals are correct and
 both are easy to read as the controller being wrong.
 
+**Device addresses have their own type.** Every address a device
+dereferences is `Device_Address`, which is `flyology_dma`'s `IOVA_Address`
+under another name — so a value crosses that boundary without a conversion
+and a host address cannot cross it at all. This crate had the weakest
+typing of the mistake the whole repository exists to prevent, in the one
+place built to demonstrate it: a block number and the address to put it at
+were the same type, and swapping them compiled.
+
 **A filesystem's view and the driver's view of one namespace agree.** A
 file written through an ordinary file interface is found on the medium by
 this driver, reading blocks and looking for the bytes rather than parsing

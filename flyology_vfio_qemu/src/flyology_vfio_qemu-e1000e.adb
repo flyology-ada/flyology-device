@@ -15,6 +15,8 @@ package body Flyology_VFIO_QEMU.E1000E is
    type Byte_Array is array (Natural range <>) of U8 with Volatile;
 
    procedure Put_64 (Base : System.Address; At_Offset : Natural; Value : U64);
+   procedure Put_Address
+     (Base : System.Address; At_Offset : Natural; Value : Device_Address);
    procedure Put_16 (Base : System.Address; At_Offset : Natural; Value : U16);
    procedure Put_8 (Base : System.Address; At_Offset : Natural; Value : U8);
    procedure Put_32 (Base : System.Address; At_Offset : Natural; Value : U32);
@@ -28,6 +30,24 @@ package body Flyology_VFIO_QEMU.E1000E is
    --  Byte by byte rather than through an overlay, because a descriptor is
    --  a little-endian layout defined by a datasheet and an overlay would
    --  silently reverse it on a big-endian host.
+
+
+   --  Writes a device address into a descriptor.
+   --
+   --  The one place an address stops being an address and becomes eight
+   --  bytes, which is why the conversion lives here under a name rather
+   --  than scattered through the call sites as U64 (...) — each of those
+   --  would be a place the distinction could be dropped without anyone
+   --  reading it as a decision.
+   procedure Put_Address
+     (Base : System.Address; At_Offset : Natural; Value : Device_Address) is
+   begin
+      Put_64 (Base, At_Offset, U64 (Value));
+   end Put_Address;
+
+   ------------
+   -- Put_64 --
+   ------------
 
    procedure Put_64 (Base : System.Address; At_Offset : Natural; Value : U64)
    is
@@ -320,7 +340,7 @@ package body Flyology_VFIO_QEMU.E1000E is
    procedure Start_Receiving
      (BAR          : Regions.Window;
       Ring         : Ring_Location;
-      Buffers      : U64;
+      Buffers      : Device_Address;
       Buffer_Bytes : Positive := Receive_Buffer_Bytes)
    is
    begin
@@ -335,8 +355,10 @@ package body Flyology_VFIO_QEMU.E1000E is
               Address => Ring.Host + SSE.Storage_Offset (At_Offset);
          begin
             Blank := (others => 0);
-            Put_64 (Ring.Host, At_Offset,
-                    Buffers + U64 (Slot) * U64 (Buffer_Bytes));
+            Put_Address
+              (Ring.Host, At_Offset,
+               Buffers
+               + Device_Address (Slot) * Device_Address (Buffer_Bytes));
          end;
       end loop;
 
@@ -344,9 +366,9 @@ package body Flyology_VFIO_QEMU.E1000E is
          Base : constant Natural := Receive_Ring_Base (Ring.Queue);
       begin
          Reg.Write_32 (BAR, Reg.Offset (Base),
-                       U32 (Ring.Device and 16#FFFF_FFFF#));
+                       Low_Half (Ring.Device));
          Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Base_High),
-                       U32 (Interfaces.Shift_Right (Ring.Device, 32)));
+                       High_Half (Ring.Device));
          Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Length),
                        U32 (Ring.Count * Descriptor_Bytes));
          Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Head), 0);
@@ -381,9 +403,9 @@ package body Flyology_VFIO_QEMU.E1000E is
          Base : constant Natural := Transmit_Ring_Base (Ring.Queue);
       begin
          Reg.Write_32 (BAR, Reg.Offset (Base),
-                       U32 (Ring.Device and 16#FFFF_FFFF#));
+                       Low_Half (Ring.Device));
          Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Base_High),
-                       U32 (Interfaces.Shift_Right (Ring.Device, 32)));
+                       High_Half (Ring.Device));
          Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Length),
                        U32 (Ring.Count * Descriptor_Bytes));
          Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Head), 0);
@@ -414,7 +436,7 @@ package body Flyology_VFIO_QEMU.E1000E is
      (BAR      : Regions.Window;
       Ring     : Ring_Location;
       Slot     : Natural;
-      Frame    : U64;
+      Frame    : Device_Address;
       Length   : Positive;
       Attempts : Positive := 20_000)
    is
@@ -431,7 +453,7 @@ package body Flyology_VFIO_QEMU.E1000E is
      (BAR      : Regions.Window;
       Ring     : Ring_Location;
       Slot     : Natural;
-      Frame    : U64;
+      Frame    : Device_Address;
       Length   : Positive;
       Options  : Transmit_Options;
       Attempts : Positive := 20_000)
@@ -446,7 +468,7 @@ package body Flyology_VFIO_QEMU.E1000E is
          Blank := (others => 0);
       end;
 
-      Put_64 (Ring.Host, At_Offset, Frame);
+      Put_Address (Ring.Host, At_Offset, Frame);
       Put_16 (Ring.Host, At_Offset + 8, U16 (Length));
 
       if Options.Insert_Checksum then
@@ -586,14 +608,14 @@ package body Flyology_VFIO_QEMU.E1000E is
      (BAR    : Regions.Window;
       Ring   : Ring_Location;
       Slot   : Natural;
-      Buffer : U64)
+      Buffer : Device_Address)
    is
       At_Offset : constant Natural := Slot * Descriptor_Bytes;
       Blank : Byte_Array (0 .. Descriptor_Bytes - 1) with Import,
         Address => Ring.Host + SSE.Storage_Offset (At_Offset);
    begin
       Blank := (others => 0);
-      Put_64 (Ring.Host, At_Offset, Buffer);
+      Put_Address (Ring.Host, At_Offset, Buffer);
       Reg.Write_Release_32
         (BAR, Reg.Offset (Receive_Ring_Base (Ring.Queue) + Ring_Tail),
          U32 (Slot));
@@ -638,7 +660,7 @@ package body Flyology_VFIO_QEMU.E1000E is
      (BAR      : Regions.Window;
       Ring     : Ring_Location;
       Slot     : Natural;
-      Frame    : U64;
+      Frame    : Device_Address;
       Context  : Transmit_Context;
       Attempts : Positive := 20_000)
    is
@@ -694,7 +716,7 @@ package body Flyology_VFIO_QEMU.E1000E is
          Blank := (others => 0);
       end;
 
-      Put_64 (Ring.Host, Data_At, Frame);
+      Put_Address (Ring.Host, Data_At, Frame);
       Put_32
         (Ring.Host, Data_At + 8,
          U32 (Total)

@@ -21,6 +21,8 @@ package body Flyology_VFIO_QEMU.NVMe is
    type Byte_Array is array (Natural range <>) of U8 with Volatile;
 
    procedure Put_64 (Base : System.Address; At_Offset : Natural; Value : U64);
+   procedure Put_Address
+     (Base : System.Address; At_Offset : Natural; Value : Device_Address);
    procedure Put_32 (Base : System.Address; At_Offset : Natural; Value : U32);
    procedure Put_16 (Base : System.Address; At_Offset : Natural; Value : U16);
    function Get_16 (Base : System.Address; At_Offset : Natural) return U16;
@@ -33,6 +35,24 @@ package body Flyology_VFIO_QEMU.NVMe is
    --  value. A queue entry is a little-endian byte layout defined by a
    --  specification, and spelling it out byte by byte keeps it correct on a
    --  big-endian host, where an overlay would silently reverse it.
+
+
+   --  Writes a device address into a descriptor.
+   --
+   --  The one place an address stops being an address and becomes eight
+   --  bytes, which is why the conversion lives here under a name rather
+   --  than scattered through the call sites as U64 (...) — each of those
+   --  would be a place the distinction could be dropped without anyone
+   --  reading it as a decision.
+   procedure Put_Address
+     (Base : System.Address; At_Offset : Natural; Value : Device_Address) is
+   begin
+      Put_64 (Base, At_Offset, U64 (Value));
+   end Put_Address;
+
+   ------------
+   -- Put_64 --
+   ------------
 
    procedure Put_64 (Base : System.Address; At_Offset : Natural; Value : U64)
    is
@@ -159,8 +179,10 @@ package body Flyology_VFIO_QEMU.NVMe is
       Polls : Natural := 0;
    begin
       Reg.Write_32 (BAR, Admin_Queue_Attributes_Register, Attributes);
-      Reg.Write_64 (BAR, Admin_Submission_Queue_Register, Submission.Device);
-      Reg.Write_64 (BAR, Admin_Completion_Queue_Register, Completion.Device);
+      Reg.Write_64
+        (BAR, Admin_Submission_Queue_Register, U64 (Submission.Device));
+      Reg.Write_64
+        (BAR, Admin_Completion_Queue_Register, U64 (Completion.Device));
 
       --  A release store: the queue addresses must be visible to the
       --  controller before it is told it may start using them.
@@ -173,8 +195,8 @@ package body Flyology_VFIO_QEMU.NVMe is
             raise Device_Misbehaved with
               "the controller reported a fatal error rather than becoming"
               & " ready. It had been given an admin submission queue at"
-              & U64'Image (Submission.Device) & " and a completion queue at"
-              & U64'Image (Completion.Device) & ".";
+              & Device_Address'Image (Submission.Device) & " and a completion queue at"
+              & Device_Address'Image (Completion.Device) & ".";
          end if;
 
          Polls := Polls + 1;
@@ -186,8 +208,8 @@ package body Flyology_VFIO_QEMU.NVMe is
               & " queues by DMA as it starts, so an address it cannot reach"
               & " looks exactly like this: no error, no readiness. Check"
               & " that bus mastering is enabled and that"
-              & U64'Image (Submission.Device) & " and"
-              & U64'Image (Completion.Device) & " are mapped.";
+              & Device_Address'Image (Submission.Device) & " and"
+              & Device_Address'Image (Completion.Device) & " are mapped.";
          end if;
       end loop;
    end Enable;
@@ -205,8 +227,8 @@ package body Flyology_VFIO_QEMU.NVMe is
       Opcode     : U8;
       Identifier : U16;
       Namespace  : Namespace_Identifier;
-      DPTR1      : U64;
-      DPTR2      : U64;
+      DPTR1      : Device_Address;
+      DPTR2      : Device_Address;
       CDW10      : U32;
       CDW11      : U32;
       CDW12      : U32;
@@ -225,8 +247,8 @@ package body Flyology_VFIO_QEMU.NVMe is
       Put_32 (Base, Entry_At + 0, U32 (Opcode));
       Put_16 (Base, Entry_At + 2, Identifier);
       Put_32 (Base, Entry_At + 4, U32 (Namespace));
-      Put_64 (Base, Entry_At + 24, DPTR1);
-      Put_64 (Base, Entry_At + 32, DPTR2);
+      Put_Address (Base, Entry_At + 24, DPTR1);
+      Put_Address (Base, Entry_At + 32, DPTR2);
       Put_32 (Base, Entry_At + 40, CDW10);
       Put_32 (Base, Entry_At + 44, CDW11);
       Put_32 (Base, Entry_At + 48, CDW12);
@@ -243,8 +265,8 @@ package body Flyology_VFIO_QEMU.NVMe is
       Opcode     : Admin_Opcode;
       Identifier : U16;
       Namespace  : Namespace_Identifier := No_Namespace;
-      DPTR1      : U64 := 0;
-      DPTR2      : U64 := 0;
+      DPTR1      : Device_Address := 0;
+      DPTR2      : Device_Address := 0;
       CDW10      : U32 := 0;
       CDW11      : U32 := 0;
       CDW12      : U32 := 0;
@@ -266,8 +288,8 @@ package body Flyology_VFIO_QEMU.NVMe is
       Opcode     : IO_Opcode;
       Identifier : U16;
       Namespace  : Namespace_Identifier;
-      DPTR1      : U64 := 0;
-      DPTR2      : U64 := 0;
+      DPTR1      : Device_Address := 0;
+      DPTR2      : Device_Address := 0;
       CDW10      : U32 := 0;
       CDW11      : U32 := 0;
       CDW12      : U32 := 0;
@@ -287,7 +309,7 @@ package body Flyology_VFIO_QEMU.NVMe is
      (Submission     : Queue_Location;
       Slot           : Natural;
       Identifier     : U16;
-      Result_Address : U64)
+      Result_Address : Device_Address)
    is
    begin
       Write_Admin_Command
@@ -304,7 +326,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Slot           : Natural;
       Identifier     : U16;
       Namespace      : Namespace_Identifier;
-      Result_Address : U64)
+      Result_Address : Device_Address)
    is
    begin
       Write_Admin_Command
@@ -323,7 +345,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Identifier       : U16;
       Queue_Number     : Queue_Identifier;
       Entries          : Positive;
-      Address          : U64;
+      Address          : Device_Address;
       Interrupt_Vector : Interrupt_Selection := No_Interrupt)
    is
       --  Bit zero says the queue is one contiguous run of memory rather
@@ -356,7 +378,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Queue_Number      : Queue_Identifier;
       Completion_Number : Queue_Identifier;
       Entries           : Positive;
-      Address           : U64)
+      Address           : Device_Address)
    is
    begin
       Write_Admin_Command
@@ -397,8 +419,8 @@ package body Flyology_VFIO_QEMU.NVMe is
       Namespace    : Namespace_Identifier;
       First_Block  : U64;
       Blocks       : Positive;
-      Address      : U64;
-      Continuation : U64 := 0)
+      Address      : Device_Address;
+      Continuation : Device_Address := 0)
    is
    begin
       --  The block count is held one less than the real number, which is
@@ -409,8 +431,8 @@ package body Flyology_VFIO_QEMU.NVMe is
          Namespace => Namespace,
          DPTR1 => Address,
          DPTR2 => Continuation,
-         CDW10 => U32 (First_Block and 16#FFFF_FFFF#),
-         CDW11 => U32 (Interfaces.Shift_Right (First_Block, 32)),
+         CDW10 => Low_Half (First_Block),
+         CDW11 => High_Half (First_Block),
          CDW12 => U32 (Blocks - 1));
    end Write_Block_Command;
 
@@ -490,7 +512,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Identifier     : U16;
       Log            : Log_Identifier;
       Bytes          : Positive;
-      Result_Address : U64;
+      Result_Address : Device_Address;
       Namespace      : Namespace_Identifier := All_Namespaces)
    is
       --  The length field counts thirty-two bit words and is held one less
@@ -539,8 +561,8 @@ package body Flyology_VFIO_QEMU.NVMe is
       Write_IO_Command
         (Submission, Slot, Opcode, Identifier,
          Namespace => Namespace,
-         CDW10 => U32 (First_Block and 16#FFFF_FFFF#),
-         CDW11 => U32 (Interfaces.Shift_Right (First_Block, 32)),
+         CDW10 => Low_Half (First_Block),
+         CDW11 => High_Half (First_Block),
          CDW12 => U32 (Blocks - 1));
    end Write_Block_Range_Command;
 
@@ -572,7 +594,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Identifier   : U16;
       Namespace    : Namespace_Identifier;
       Ranges       : Positive;
-      List_Address : U64)
+      List_Address : Device_Address)
    is
    begin
       --  Bit two of the eleventh word is what makes this a deallocation
@@ -616,7 +638,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Namespace      : Namespace_Identifier;
       First_Block    : U64;
       Bytes          : Positive;
-      Result_Address : U64)
+      Result_Address : Device_Address)
    is
       --  Counted in thirty-two bit words, one less than the real number,
       --  like every other length in this specification.
@@ -629,8 +651,8 @@ package body Flyology_VFIO_QEMU.NVMe is
         (Submission, Slot, Opcode_Zone_Receive, Identifier,
          Namespace => Namespace,
          DPTR1 => Result_Address,
-         CDW10 => U32 (First_Block and 16#FFFF_FFFF#),
-         CDW11 => U32 (Interfaces.Shift_Right (First_Block, 32)),
+         CDW10 => Low_Half (First_Block),
+         CDW11 => High_Half (First_Block),
          CDW12 => Words);
    end Write_Zone_Report_Command;
 
@@ -661,8 +683,8 @@ package body Flyology_VFIO_QEMU.NVMe is
       Write_IO_Command
         (Submission, Slot, Opcode_Zone_Send, Identifier,
          Namespace => Namespace,
-         CDW10 => U32 (First_Block and 16#FFFF_FFFF#),
-         CDW11 => U32 (Interfaces.Shift_Right (First_Block, 32)),
+         CDW10 => Low_Half (First_Block),
+         CDW11 => High_Half (First_Block),
          CDW13 => Code or Sweep);
    end Write_Zone_Action_Command;
 
@@ -677,7 +699,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Namespace  : Namespace_Identifier;
       Zone_Start : U64;
       Blocks     : Positive;
-      Address    : U64)
+      Address    : Device_Address)
    is
    begin
       --  The block named is the start of the zone, not where the data will
@@ -687,8 +709,8 @@ package body Flyology_VFIO_QEMU.NVMe is
         (Submission, Slot, Opcode_Zone_Append, Identifier,
          Namespace => Namespace,
          DPTR1 => Address,
-         CDW10 => U32 (Zone_Start and 16#FFFF_FFFF#),
-         CDW11 => U32 (Interfaces.Shift_Right (Zone_Start, 32)),
+         CDW10 => Low_Half (Zone_Start),
+         CDW11 => High_Half (Zone_Start),
          CDW12 => U32 (Blocks - 1));
    end Write_Zone_Append_Command;
 
@@ -702,7 +724,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Identifier   : U16;
       Namespace    : Namespace_Identifier;
       Attach       : Boolean;
-      List_Address : U64)
+      List_Address : Device_Address)
    is
    begin
       Write_Admin_Command
@@ -1026,7 +1048,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Slot           : Natural;
       Identifier     : U16;
       Namespace      : Namespace_Identifier;
-      Result_Address : U64;
+      Result_Address : Device_Address;
       Bytes          : Positive;
       Directive      : Directive_Kind := Directive_Identify;
       Operation      : Directive_Operation := Directive_Return_Parameters;
@@ -1058,7 +1080,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Slot           : Natural;
       Identifier     : U16;
       Namespace      : Namespace_Identifier;
-      Buffer_Address : U64 := 0;
+      Buffer_Address : Device_Address := 0;
       Bytes          : Natural := 0;
       Directive      : Directive_Kind := Directive_Identify;
       Operation      : Directive_Operation := Directive_Enable;
@@ -1180,7 +1202,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       Slot         : Natural;
       Identifier   : U16;
       Namespace    : Namespace_Identifier;
-      List_Address : U64;
+      List_Address : Device_Address;
       Sources      : Positive;
       First_Block  : U64;
       Format       : Copy_Format := Format_32_Byte)
@@ -1194,8 +1216,8 @@ package body Flyology_VFIO_QEMU.NVMe is
         (Submission, Slot, Opcode_Copy, Identifier,
          Namespace => Namespace,
          DPTR1 => List_Address,
-         CDW10 => U32 (First_Block and 16#FFFF_FFFF#),
-         CDW11 => U32 (Interfaces.Shift_Right (First_Block, 32)),
+         CDW10 => Low_Half (First_Block),
+         CDW11 => High_Half (First_Block),
          CDW12 => U32 (Sources - 1)
                   or Interfaces.Shift_Left
                        (U32 (Copy_Format'Pos (Format)), 8));
@@ -1206,15 +1228,15 @@ package body Flyology_VFIO_QEMU.NVMe is
    ------------------------------
 
    function Describe_Transfer
-     (Buffer      : U64;
+     (Buffer      : Device_Address;
       Bytes       : Positive;
       Page_Bytes  : Positive;
       List_Host   : System.Address;
-      List_Device : U64) return Data_Pointers
+      List_Device : Device_Address) return Data_Pointers
    is
-      Span  : constant U64 := U64 (Page_Bytes);
+      Span  : constant Device_Address := Device_Address (Page_Bytes);
       Pages : constant Natural :=
-        Natural ((U64 (Bytes) + Span - 1) / Span);
+        Natural ((Device_Address (Bytes) + Span - 1) / Span);
    begin
       if (Buffer mod Span) /= 0 then
          raise Device_Misused with
@@ -1240,7 +1262,8 @@ package body Flyology_VFIO_QEMU.NVMe is
          --  The list names every page after the first. The first stays in
          --  the first pointer, so entry zero is the second page and an
          --  off-by-one here transfers the whole buffer shifted by a page.
-         Put_64 (List_Host, Index * 8, Buffer + Span * U64 (Index + 1));
+         Put_Address
+           (List_Host, Index * 8, Buffer + Span * Device_Address (Index + 1));
       end loop;
 
       return (First => Buffer, Second => List_Device);

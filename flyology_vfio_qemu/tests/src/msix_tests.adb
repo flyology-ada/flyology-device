@@ -48,6 +48,7 @@ procedure MSIX_Tests is
    package SSE renames System.Storage_Elements;
 
    use type DMA.Byte_Count;
+   use type DMA.IOVA_Address;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_64;
    use type System.Address;
@@ -185,31 +186,31 @@ begin
                         Host    =>
                           Host + SSE.Storage_Offset (Submission_Offset),
                         Device  =>
-                          U64 (Window_Base) + U64 (Submission_Offset),
+                          Window_Base + Device_Address (Submission_Offset),
                         Entries => Queue_Entries);
                      Admin_Comp : constant Controller.Queue_Location :=
                        (Kind    => Controller.Admin,
                         Host    =>
                           Host + SSE.Storage_Offset (Completion_Offset),
                         Device  =>
-                          U64 (Window_Base) + U64 (Completion_Offset),
+                          Window_Base + Device_Address (Completion_Offset),
                         Entries => Queue_Entries);
                      IO_Sub : constant Controller.Queue_Location :=
                        (Kind    => Controller.Namespace_IO,
                         Host    =>
                           Host + SSE.Storage_Offset (IO_Submission_Offset),
                         Device  =>
-                          U64 (Window_Base) + U64 (IO_Submission_Offset),
+                          Window_Base + Device_Address (IO_Submission_Offset),
                         Entries => Queue_Entries);
                      IO_Comp : constant Controller.Queue_Location :=
                        (Kind    => Controller.Namespace_IO,
                         Host    =>
                           Host + SSE.Storage_Offset (IO_Completion_Offset),
                         Device  =>
-                          U64 (Window_Base) + U64 (IO_Completion_Offset),
+                          Window_Base + Device_Address (IO_Completion_Offset),
                         Entries => Queue_Entries);
-                     Buffer_Device : constant U64 :=
-                       U64 (Window_Base) + U64 (Buffer_Offset);
+                     Buffer_Device : constant Device_Address :=
+                       Window_Base + Device_Address (Buffer_Offset);
 
                      Everything : array (1 .. Scratch_Bytes) of U8
                        with Import, Volatile, Address => Host;

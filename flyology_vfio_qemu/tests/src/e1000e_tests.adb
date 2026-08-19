@@ -43,10 +43,10 @@ procedure E1000E_Tests is
    package Reg renames Flyology_VFIO.Registers;
 
    use type DMA.Byte_Count;
+   use type DMA.IOVA_Address;
    use type Interfaces.Unsigned_32;
    use type NIC.MAC_Address;
    use type Interfaces.Unsigned_8;
-   use type Interfaces.Unsigned_64;
    use type System.Storage_Elements.Storage_Offset;
 
    package SSE renames System.Storage_Elements;
@@ -291,19 +291,19 @@ begin
 
                Receive_Ring : constant NIC.Ring_Location :=
                  (Host   => Host + SSE.Storage_Offset (Receive_Ring_Offset),
-                  Device => U64 (Window_Base) + U64 (Receive_Ring_Offset),
+                  Device => Window_Base + Device_Address (Receive_Ring_Offset),
                   Count  => Ring_Slots,
                   Queue  => 0);
                Transmit_Ring : constant NIC.Ring_Location :=
                  (Host   => Host + SSE.Storage_Offset (Transmit_Ring_Offset),
-                  Device => U64 (Window_Base) + U64 (Transmit_Ring_Offset),
+                  Device => Window_Base + Device_Address (Transmit_Ring_Offset),
                   Count  => Ring_Slots,
                   Queue  => 0);
 
-               Receive_Buffers : constant U64 :=
-                 U64 (Window_Base) + U64 (Receive_Buffers_Offset);
-               Transmit_Frame : constant U64 :=
-                 U64 (Window_Base) + U64 (Transmit_Frame_Offset);
+               Receive_Buffers : constant Device_Address :=
+                 Window_Base + Device_Address (Receive_Buffers_Offset);
+               Transmit_Frame : constant Device_Address :=
+                 Window_Base + Device_Address (Transmit_Frame_Offset);
 
                Frame_Bytes : array (0 .. 2047) of U8
                  with Import, Volatile,
@@ -466,8 +466,9 @@ begin
                   NIC.Recycle_Received
                     (BAR, Receive_Ring, Slot => Reply_Slot,
                      Buffer => Receive_Buffers
-                               + U64 (Reply_Slot)
-                                 * U64 (NIC.Receive_Buffer_Bytes));
+                               + Device_Address (Reply_Slot)
+                                 * Device_Address
+                                     (NIC.Receive_Buffer_Bytes));
                   end;
                end;
 

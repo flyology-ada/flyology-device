@@ -49,10 +49,10 @@ procedure E1000E_Queues_Tests is
    package SSE renames System.Storage_Elements;
 
    use type DMA.Byte_Count;
+   use type DMA.IOVA_Address;
    use type NIC.Queue_Index;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
-   use type Interfaces.Unsigned_64;
    use type System.Address;
    use type SSE.Storage_Offset;
 
@@ -113,8 +113,9 @@ begin
                  return System.Address
                is (Host + SSE.Storage_Offset (Offset));
 
-               function At_Device (Offset : DMA.Byte_Count) return U64
-               is (U64 (Window_Base) + U64 (Offset));
+               function At_Device (Offset : DMA.Byte_Count)
+                 return Device_Address
+               is (Window_Base + Device_Address (Offset));
 
                RX : constant array (NIC.Queue_Index) of NIC.Ring_Location :=
                  [0 => (Host   => At_Host (RX0_Ring_Offset),

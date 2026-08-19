@@ -43,9 +43,9 @@ procedure Container_Sharing_Tests is
    package SSE renames System.Storage_Elements;
 
    use type DMA.Byte_Count;
+   use type DMA.IOVA_Address;
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_32;
-   use type Interfaces.Unsigned_64;
    use type System.Address;
    use type SSE.Storage_Offset;
 
@@ -218,14 +218,14 @@ begin
                --  buffer and back out to the second offset.
                Edu.Transfer
                  (First_BAR,
-                  Source      => U64 (Window_Base) + U64 (First_Offset),
+                  Source      => Window_Base + Device_Address (First_Offset),
                   Destination => Edu.Device_Buffer_Base,
                   Count       => Payload,
                   Direction   => Edu.To_Device);
                Edu.Transfer
                  (First_BAR,
                   Source      => Edu.Device_Buffer_Base,
-                  Destination => U64 (Window_Base) + U64 (Second_Offset),
+                  Destination => Window_Base + Device_Address (Second_Offset),
                   Count       => Payload,
                   Direction   => Edu.From_Device);
 
@@ -239,14 +239,14 @@ begin
                --  the first device wrote there.
                Edu.Transfer
                  (Second_BAR,
-                  Source      => U64 (Window_Base) + U64 (Second_Offset),
+                  Source      => Window_Base + Device_Address (Second_Offset),
                   Destination => Edu.Device_Buffer_Base,
                   Count       => Payload,
                   Direction   => Edu.To_Device);
                Edu.Transfer
                  (Second_BAR,
                   Source      => Edu.Device_Buffer_Base,
-                  Destination => U64 (Window_Base) + U64 (Third_Offset),
+                  Destination => Window_Base + Device_Address (Third_Offset),
                   Count       => Payload,
                   Direction   => Edu.From_Device);
 

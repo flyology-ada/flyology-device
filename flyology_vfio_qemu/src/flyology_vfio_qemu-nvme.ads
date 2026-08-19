@@ -224,7 +224,7 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @field Entries How many entries the queue holds
    type Queue_Location (Kind : Queue_Kind := Admin) is record
       Host    : System.Address;
-      Device  : U64;
+      Device  : Device_Address;
       Entries : Positive;
    end record;
 
@@ -328,8 +328,8 @@ package Flyology_VFIO_QEMU.NVMe is
       Opcode     : Admin_Opcode;
       Identifier : U16;
       Namespace  : Namespace_Identifier := No_Namespace;
-      DPTR1      : U64 := 0;
-      DPTR2      : U64 := 0;
+      DPTR1      : Device_Address := 0;
+      DPTR2      : Device_Address := 0;
       CDW10      : U32 := 0;
       CDW11      : U32 := 0;
       CDW12      : U32 := 0;
@@ -355,8 +355,8 @@ package Flyology_VFIO_QEMU.NVMe is
       Opcode     : IO_Opcode;
       Identifier : U16;
       Namespace  : Namespace_Identifier;
-      DPTR1      : U64 := 0;
-      DPTR2      : U64 := 0;
+      DPTR1      : Device_Address := 0;
+      DPTR2      : Device_Address := 0;
       CDW10      : U32 := 0;
       CDW11      : U32 := 0;
       CDW12      : U32 := 0;
@@ -526,7 +526,7 @@ package Flyology_VFIO_QEMU.NVMe is
       Namespace      : Namespace_Identifier;
       First_Block    : U64;
       Bytes          : Positive;
-      Result_Address : U64)
+      Result_Address : Device_Address)
      with Pre => Submission.Kind = Namespace_IO;
 
    --  Writes a command changing a zone's state.
@@ -562,7 +562,7 @@ package Flyology_VFIO_QEMU.NVMe is
       Namespace  : Namespace_Identifier;
       Zone_Start : U64;
       Blocks     : Positive;
-      Address    : U64)
+      Address    : Device_Address)
      with Pre => Submission.Kind = Namespace_IO;
 
    --  Writes a command attaching a namespace to controllers, or detaching.
@@ -578,7 +578,7 @@ package Flyology_VFIO_QEMU.NVMe is
       Identifier   : U16;
       Namespace    : Namespace_Identifier;
       Attach       : Boolean;
-      List_Address : U64)
+      List_Address : Device_Address)
      with Pre => Submission.Kind = Admin;
 
    --  Fills in a controller list naming one controller.
@@ -666,7 +666,7 @@ package Flyology_VFIO_QEMU.NVMe is
       Slot           : Natural;
       Identifier     : U16;
       Namespace      : Namespace_Identifier;
-      Result_Address : U64;
+      Result_Address : Device_Address;
       Bytes          : Positive;
       Directive      : Directive_Kind := Directive_Identify;
       Operation      : Directive_Operation := Directive_Return_Parameters;
@@ -695,7 +695,7 @@ package Flyology_VFIO_QEMU.NVMe is
       Slot           : Natural;
       Identifier     : U16;
       Namespace      : Namespace_Identifier;
-      Buffer_Address : U64 := 0;
+      Buffer_Address : Device_Address := 0;
       Bytes          : Natural := 0;
       Directive      : Directive_Kind := Directive_Identify;
       Operation      : Directive_Operation := Directive_Enable;
@@ -785,7 +785,7 @@ package Flyology_VFIO_QEMU.NVMe is
       Slot         : Natural;
       Identifier   : U16;
       Namespace    : Namespace_Identifier;
-      List_Address : U64;
+      List_Address : Device_Address;
       Sources      : Positive;
       First_Block  : U64;
       Format       : Copy_Format := Format_32_Byte)
@@ -885,7 +885,7 @@ package Flyology_VFIO_QEMU.NVMe is
      (Submission     : Queue_Location;
       Slot           : Natural;
       Identifier     : U16;
-      Result_Address : U64);
+      Result_Address : Device_Address);
 
    --  Tells the controller that a submission queue entry is ready.
    --
@@ -963,7 +963,7 @@ package Flyology_VFIO_QEMU.NVMe is
       Slot           : Natural;
       Identifier     : U16;
       Namespace      : Namespace_Identifier;
-      Result_Address : U64)
+      Result_Address : Device_Address)
      with Pre => Submission.Kind = Admin;
 
    --  Writes a command creating an I/O completion queue.
@@ -990,7 +990,7 @@ package Flyology_VFIO_QEMU.NVMe is
       Identifier       : U16;
       Queue_Number     : Queue_Identifier;
       Entries          : Positive;
-      Address          : U64;
+      Address          : Device_Address;
       Interrupt_Vector : Interrupt_Selection := No_Interrupt)
      with Pre => Submission.Kind = Admin
                  and then Queue_Number /= Admin_Queue;
@@ -1010,7 +1010,7 @@ package Flyology_VFIO_QEMU.NVMe is
       Queue_Number      : Queue_Identifier;
       Completion_Number : Queue_Identifier;
       Entries           : Positive;
-      Address           : U64)
+      Address           : Device_Address)
      with Pre => Submission.Kind = Admin
                  and then Queue_Number /= Admin_Queue
                  and then Completion_Number /= Admin_Queue;
@@ -1055,8 +1055,8 @@ package Flyology_VFIO_QEMU.NVMe is
       Namespace    : Namespace_Identifier;
       First_Block  : U64;
       Blocks       : Positive;
-      Address      : U64;
-      Continuation : U64 := 0)
+      Address      : Device_Address;
+      Continuation : Device_Address := 0)
      with Pre => Submission.Kind = Namespace_IO
                  and then Blocks <= 65_536;
 
@@ -1076,8 +1076,8 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @field First Where the transfer starts
    --  @field Second Unused, the next page, or a list of pages
    type Data_Pointers is record
-      First  : U64 := 0;
-      Second : U64 := 0;
+      First  : Device_Address := 0;
+      Second : Device_Address := 0;
    end record;
 
    --  How many pages one page-list page can name.
@@ -1111,14 +1111,14 @@ package Flyology_VFIO_QEMU.NVMe is
    --  @param List_Host Where a page list may be built, in this process
    --  @param List_Device The same place as a device address
    --  @return The two pointers to put in the command
-   --  @exception Device_Misbehaved The transfer needs more than one list
+   --  @exception Device_Misused The transfer needs more than one list
    --    page, or the buffer is not page-aligned
    function Describe_Transfer
-     (Buffer      : U64;
+     (Buffer      : Device_Address;
       Bytes       : Positive;
       Page_Bytes  : Positive;
       List_Host   : System.Address;
-      List_Device : U64) return Data_Pointers;
+      List_Device : Device_Address) return Data_Pointers;
 
    --  The largest transfer the controller will accept, in bytes.
    --
@@ -1174,7 +1174,7 @@ package Flyology_VFIO_QEMU.NVMe is
       Identifier     : U16;
       Log            : Log_Identifier;
       Bytes          : Positive;
-      Result_Address : U64;
+      Result_Address : Device_Address;
       Namespace      : Namespace_Identifier := All_Namespaces)
      --  A length in whole words, and at least one of them. The command
      --  carries the count one less than the real number, so fewer than
@@ -1252,7 +1252,7 @@ package Flyology_VFIO_QEMU.NVMe is
       Identifier   : U16;
       Namespace    : Namespace_Identifier;
       Ranges       : Positive;
-      List_Address : U64)
+      List_Address : Device_Address)
      with Pre => Submission.Kind = Namespace_IO and then Ranges <= 256;
 
    --  Fills in one entry of a deallocation range list.

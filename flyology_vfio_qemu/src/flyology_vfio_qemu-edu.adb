@@ -152,8 +152,8 @@ package body Flyology_VFIO_QEMU.Edu is
 
    procedure Transfer
      (BAR         : Regions.Window;
-      Source      : U64;
-      Destination : U64;
+      Source      : Device_Address;
+      Destination : Device_Address;
       Count       : U64;
       Direction   : Transfer_Direction;
       Announce    : Boolean := False;
@@ -168,18 +168,19 @@ package body Flyology_VFIO_QEMU.Edu is
       --  moves nothing — or, without an IOMMU, moves the bytes somewhere
       --  nobody chose.
       declare
-         type Endpoint_List is array (Positive range <>) of U64;
+         type Endpoint_List is array (Positive range <>) of Device_Address;
          Endpoints : constant Endpoint_List := [Source, Destination];
       begin
          for Endpoint of Endpoints loop
             if Endpoint > Maximum_DMA_Address then
                raise Device_Misbehaved with
-                 "address" & U64'Image (Endpoint) & " is wider than the"
+                 "address" & Device_Address'Image (Endpoint)
+                 & " is wider than the"
                  & " twenty-eight bits this device can put on the bus, and"
-                 & " it would be masked to" & U64'Image
+                 & " it would be masked to" & Device_Address'Image
                    (Endpoint and Maximum_DMA_Address)
                  & " rather than refused. Choose an I/O virtual address"
-                 & " below" & U64'Image (Maximum_DMA_Address + 1)
+                 & " below" & Device_Address'Image (Maximum_DMA_Address + 1)
                  & ", or widen the device's dma_mask property when starting"
                  & " QEMU.";
             end if;
@@ -193,8 +194,8 @@ package body Flyology_VFIO_QEMU.Edu is
          Command := Command or DMA_Raise_When_Done;
       end if;
 
-      Reg.Write_64 (BAR, DMA_Source_Register, Source);
-      Reg.Write_64 (BAR, DMA_Destination_Register, Destination);
+      Reg.Write_64 (BAR, DMA_Source_Register, U64 (Source));
+      Reg.Write_64 (BAR, DMA_Destination_Register, U64 (Destination));
       Reg.Write_64 (BAR, DMA_Count_Register, Count);
 
       --  Read the three back before starting. This device ignores writes to
@@ -204,10 +205,14 @@ package body Flyology_VFIO_QEMU.Edu is
       --  something unexpected" into "the device never received the
       --  request", which are very different problems.
       declare
-         Kept_Source      : constant U64 :=
-           Reg.Read_64 (BAR, DMA_Source_Register);
-         Kept_Destination : constant U64 :=
-           Reg.Read_64 (BAR, DMA_Destination_Register);
+         --  Read back as addresses, because that is what they are: the
+         --  comparison below is the whole point of this block, and two
+         --  values of different types would not have compiled into a
+         --  comparison at all.
+         Kept_Source      : constant Device_Address :=
+           Device_Address (Reg.Read_64 (BAR, DMA_Source_Register));
+         Kept_Destination : constant Device_Address :=
+           Device_Address (Reg.Read_64 (BAR, DMA_Destination_Register));
          Kept_Count       : constant U64 :=
            Reg.Read_64 (BAR, DMA_Count_Register);
       begin
@@ -217,10 +222,12 @@ package body Flyology_VFIO_QEMU.Edu is
          then
             raise Device_Misbehaved with
               "the device did not keep the transfer it was given: asked for"
-              & " source" & U64'Image (Source) & " destination"
-              & U64'Image (Destination) & " count" & U64'Image (Count)
-              & ", and it reports source" & U64'Image (Kept_Source)
-              & " destination" & U64'Image (Kept_Destination) & " count"
+              & " source" & Device_Address'Image (Source) & " destination"
+              & Device_Address'Image (Destination) & " count"
+              & U64'Image (Count)
+              & ", and it reports source" & Device_Address'Image (Kept_Source)
+              & " destination" & Device_Address'Image (Kept_Destination)
+              & " count"
               & U64'Image (Kept_Count) & ".";
          end if;
       end;

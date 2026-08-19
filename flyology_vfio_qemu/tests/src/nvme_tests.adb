@@ -47,6 +47,7 @@ procedure NVMe_Tests is
    package SSE renames System.Storage_Elements;
 
    use type DMA.Byte_Count;
+   use type DMA.IOVA_Address;
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
@@ -238,53 +239,53 @@ begin
                   Submission : constant Controller.Queue_Location :=
                     (Kind    => Controller.Admin,
                      Host    => Host + SSE.Storage_Offset (Submission_Offset),
-                     Device  => U64 (Window_Base) + U64 (Submission_Offset),
+                     Device  => Window_Base + Device_Address (Submission_Offset),
                      Entries => Queue_Entries);
                   Completion : constant Controller.Queue_Location :=
                     (Kind    => Controller.Admin,
                      Host    => Host + SSE.Storage_Offset (Completion_Offset),
-                     Device  => U64 (Window_Base) + U64 (Completion_Offset),
+                     Device  => Window_Base + Device_Address (Completion_Offset),
                      Entries => Queue_Entries);
 
                   Identify_Host : constant System.Address :=
                     Host + SSE.Storage_Offset (Identify_Offset);
-                  Identify_Device : constant U64 :=
-                    U64 (Window_Base) + U64 (Identify_Offset);
+                  Identify_Device : constant Device_Address :=
+                    Window_Base + Device_Address (Identify_Offset);
 
                   Namespace_Host : constant System.Address :=
                     Host + SSE.Storage_Offset (Namespace_Info_Offset);
-                  Namespace_Info_Device : constant U64 :=
-                    U64 (Window_Base) + U64 (Namespace_Info_Offset);
+                  Namespace_Info_Device : constant Device_Address :=
+                    Window_Base + Device_Address (Namespace_Info_Offset);
 
                   IO_Submission : constant Controller.Queue_Location :=
                     (Kind    => Controller.Namespace_IO,
                      Host    =>
                        Host + SSE.Storage_Offset (IO_Submission_Offset),
                      Device  =>
-                       U64 (Window_Base) + U64 (IO_Submission_Offset),
+                       Window_Base + Device_Address (IO_Submission_Offset),
                      Entries => Queue_Entries);
                   IO_Completion : constant Controller.Queue_Location :=
                     (Kind    => Controller.Namespace_IO,
                      Host    =>
                        Host + SSE.Storage_Offset (IO_Completion_Offset),
                      Device  =>
-                       U64 (Window_Base) + U64 (IO_Completion_Offset),
+                       Window_Base + Device_Address (IO_Completion_Offset),
                      Entries => Queue_Entries);
 
-                  IO_Submission_Device : constant U64 := IO_Submission.Device;
-                  IO_Completion_Device : constant U64 := IO_Completion.Device;
+                  IO_Submission_Device : constant Device_Address := IO_Submission.Device;
+                  IO_Completion_Device : constant Device_Address := IO_Completion.Device;
 
                   Log_Host : constant System.Address :=
                     Host + SSE.Storage_Offset (Log_Buffer_Offset);
-                  Log_Device : constant U64 :=
-                    U64 (Window_Base) + U64 (Log_Buffer_Offset);
+                  Log_Device : constant Device_Address :=
+                    Window_Base + Device_Address (Log_Buffer_Offset);
 
                   Pointer_List_Host : constant System.Address :=
                     Host + SSE.Storage_Offset (Pointer_List_Offset);
-                  Pointer_List_Device : constant U64 :=
-                    U64 (Window_Base) + U64 (Pointer_List_Offset);
-                  Large_Device : constant U64 :=
-                    U64 (Window_Base) + U64 (Large_Buffer_Offset);
+                  Pointer_List_Device : constant Device_Address :=
+                    Window_Base + Device_Address (Pointer_List_Offset);
+                  Large_Device : constant Device_Address :=
+                    Window_Base + Device_Address (Large_Buffer_Offset);
 
                   Log_Bytes : array (0 .. 511) of U8
                     with Import, Volatile, Address => Log_Host;
@@ -295,10 +296,10 @@ begin
                          Address =>
                            Host + SSE.Storage_Offset (Large_Buffer_Offset);
 
-                  Write_Buffer_Device : constant U64 :=
-                    U64 (Window_Base) + U64 (Write_Buffer_Offset);
-                  Read_Buffer_Device : constant U64 :=
-                    U64 (Window_Base) + U64 (Read_Buffer_Offset);
+                  Write_Buffer_Device : constant Device_Address :=
+                    Window_Base + Device_Address (Write_Buffer_Offset);
+                  Read_Buffer_Device : constant Device_Address :=
+                    Window_Base + Device_Address (Read_Buffer_Offset);
 
                   Write_Bytes : array (1 .. 4096) of U8
                     with Import, Volatile,
@@ -965,15 +966,21 @@ begin
                            Pointer_Bytes := (others => 0);
                            for Page in 1 .. Large_Buffer_Pages - 1 loop
                               declare
-                                 Address : constant U64 :=
-                                   Large_Device + U64 (Page) * 4096;
+                                 Address : constant Device_Address :=
+                                   Large_Device + Device_Address (Page) * 4096;
                                  At_Offset : constant Natural :=
                                    (Page - 1) * 8;
                               begin
+                                 --  Serialised through the address's own
+                                 --  type rather than a shift on a plain
+                                 --  number, so the page list this test
+                                 --  builds by hand is built out of the
+                                 --  same thing the library would put
+                                 --  there.
                                  for Byte in 0 .. 7 loop
                                     Pointer_Bytes (At_Offset + Byte) :=
-                                      U8 (Interfaces.Shift_Right
-                                            (Address, 8 * Byte) and 16#FF#);
+                                      U8 ((Address / 2 ** (8 * Byte))
+                                          mod 256);
                                  end loop;
                               end;
                            end loop;

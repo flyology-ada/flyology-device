@@ -1,4 +1,7 @@
+with Flyology_DMA;
 with Interfaces;
+use type Flyology_DMA.IOVA_Address;
+use type Interfaces.Unsigned_64;
 
 --  Driving QEMU's virtual PCI devices through flyology_vfio.
 --
@@ -40,6 +43,45 @@ package Flyology_VFIO_QEMU is
    subtype U16 is Interfaces.Unsigned_16;
    subtype U32 is Interfaces.Unsigned_32;
    subtype U64 is Interfaces.Unsigned_64;
+
+   --  An address as a device puts it on the bus.
+   --
+   --  The same type flyology_dma programs into the IOMMU, so a value
+   --  crosses that boundary without a conversion and a host address cannot
+   --  cross it at all. Every parameter below that a device dereferences is
+   --  one of these rather than a plain sixty-four bit number, which is the
+   --  rule the layers underneath have followed from the start and this
+   --  crate did not — leaving the weakest typing of the defining mistake in
+   --  the one place built to demonstrate it. Two adjacent parameters, a
+   --  block number and the address to put it at, used to be the same type
+   --  and swapping them compiled.
+   subtype Device_Address is Flyology_DMA.IOVA_Address;
+
+   --  The low and high halves of a device address.
+   --
+   --  Every ring base, queue base and data pointer in this crate is given
+   --  to its device as two thirty-two bit registers, so this pair of
+   --  operations appears everywhere. Named, because "shift right by
+   --  thirty-two" written out twenty times is twenty chances to write
+   --  thirty-one.
+   --
+   --  @param Value The address to split
+   --  @return The half named
+   function Low_Half (Value : Device_Address) return U32
+     is (U32 (Value mod 2 ** 32));
+
+   function High_Half (Value : Device_Address) return U32
+     is (U32 (Value / 2 ** 32));
+
+   --  And for the values that are not addresses but are still handed over
+   --  in two pieces — a starting block, most often. Overloaded rather than
+   --  named apart because the operation is the same one; what differs is
+   --  what is being split, and the type says that.
+   function Low_Half (Value : U64) return U32
+     is (U32 (Value and 16#FFFF_FFFF#));
+
+   function High_Half (Value : U64) return U32
+     is (U32 (Interfaces.Shift_Right (Value, 32)));
 
    --  A PCI address in the full domain:bus:device.function form.
    --

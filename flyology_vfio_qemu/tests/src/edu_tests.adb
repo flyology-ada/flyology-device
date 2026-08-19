@@ -44,6 +44,7 @@ procedure Edu_Tests is
    package SSE renames System.Storage_Elements;
 
    use type DMA.Byte_Count;
+   use type DMA.IOVA_Address;
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
@@ -219,7 +220,7 @@ begin
                --  different part of the same region.
                Edu.Transfer
                  (BAR,
-                  Source      => U64 (Window_Base) + U64 (Source_Offset),
+                  Source      => Window_Base + Device_Address (Source_Offset),
                   Destination => Edu.Device_Buffer_Base,
                   Count       => Payload_Length,
                   Direction   => Edu.To_Device);
@@ -249,7 +250,7 @@ begin
                  (BAR,
                   Source      => Edu.Device_Buffer_Base,
                   Destination =>
-                    U64 (Window_Base) + U64 (Destination_Offset),
+                    Window_Base + Device_Address (Destination_Offset),
                   Count       => Payload_Length,
                   Direction   => Edu.From_Device);
 
@@ -291,7 +292,7 @@ begin
                  (BAR,
                   Source      => Edu.Device_Buffer_Base,
                   Destination =>
-                    U64 (Window_Base) + U64 (Destination_Offset) + 64,
+                    Window_Base + Device_Address (Destination_Offset) + 64,
                   Count       => 256,
                   Direction   => Edu.From_Device);
 
@@ -379,7 +380,7 @@ begin
                           (BAR,
                            Source      => Edu.Device_Buffer_Base,
                            Destination =>
-                             U64 (Window_Base) + U64 (Destination_Offset),
+                             Window_Base + Device_Address (Destination_Offset),
                            Count       => Payload_Length,
                            Direction   => Edu.From_Device,
                            Announce    => True);

@@ -76,10 +76,10 @@ procedure E1000E_Peer_Tests is
    package SSE renames System.Storage_Elements;
 
    use type DMA.Byte_Count;
+   use type DMA.IOVA_Address;
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
-   use type Interfaces.Unsigned_64;
    use type NIC.MAC_Address;
    use type NIC.Queue_Index;
    use type System.Address;
@@ -420,8 +420,9 @@ begin
                  return System.Address
                is (Host + SSE.Storage_Offset (Offset));
 
-               function At_Device (Offset : DMA.Byte_Count) return U64
-               is (U64 (Window_Base) + U64 (Offset));
+               function At_Device (Offset : DMA.Byte_Count)
+                 return Device_Address
+               is (Window_Base + Device_Address (Offset));
 
                RX : constant array (NIC.Queue_Index) of NIC.Ring_Location :=
                  [0 => (Host   => At_Host (RX0_Ring),
@@ -452,7 +453,8 @@ begin
                  with Import, Volatile, Address => At_Host (RX0_Buffers);
 
                function Buffer_Device
-                 (Queue : NIC.Queue_Index; Slot : Natural) return U64
+                 (Queue : NIC.Queue_Index; Slot : Natural)
+                  return Device_Address
                is (At_Device
                      (RX0_Buffers
                       + DMA.Byte_Count (NIC.Queue_Index'Pos (Queue))

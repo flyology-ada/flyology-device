@@ -241,7 +241,7 @@ procedure NVMe_File_Tests is
                  DMA.Regions.Base_Address (Area);
             begin
                Disk.Open
-                 (Volume, BAR, Host, U64 (Window_Base), Scratch_Bytes,
+                 (Volume, BAR, Host, Window_Base, Scratch_Bytes,
                   Namespace);
                Harness.Check
                  (Volume.Is_Open,
