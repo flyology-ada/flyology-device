@@ -524,10 +524,14 @@ begin
                   Reg.Write_32 (BAR, NIC.Interrupt_Mask_Set_Register, Wanted);
                   Reg.Write_32
                     (BAR, NIC.Interrupt_Mask_Clear_Register, Wanted);
-                  Harness.Check
-                    (True,
-                     "the interrupt mask registers accept being set and"
-                     & " cleared");
+                  --  A note, not a check. Nothing here can fail: a write
+                  --  to a register cannot be refused, and neither register
+                  --  reads back. Counting it as a check inflates the tally
+                  --  with something that would pass on a device that was
+                  --  not there.
+                  Harness.Note
+                    ("the interrupt mask registers were set and cleared;"
+                     & " neither reads back, so nothing was verified");
                end;
 
                ------------------------------------------------------

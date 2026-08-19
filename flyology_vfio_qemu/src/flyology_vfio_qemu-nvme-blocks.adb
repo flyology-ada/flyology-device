@@ -34,6 +34,7 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
    procedure Demand
      (Self : in out Volume; Answer : Completion; Doing : String);
    function Trimmed (Text : String) return String;
+   procedure Same_Window (Self : Volume; BAR : Regions.Window);
    function Padded (Text : String; Width : Positive) return String;
 
    -------------------
@@ -45,6 +46,7 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
    is
       Answer : Completion;
    begin
+      Same_Window (Self, BAR);
       Ring_Submission_Doorbell
         (BAR, Self.Stride, Admin_Queue,
          (Self.Admin_Slot + 1) mod Queue_Entries);
@@ -77,6 +79,7 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
    is
       Answer : Completion;
    begin
+      Same_Window (Self, BAR);
       Ring_Submission_Doorbell
         (BAR, Self.Stride, IO_Queue, (Self.IO_Slot + 1) mod Queue_Entries);
       Answer := Await_Completion (Self.IO_Comp, Self.IO_Slot, Self.IO_Phase);
@@ -108,6 +111,17 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
    --  A block device that carried on after a refused command would be
    --  worse than one that stopped: the caller's next read would return
    --  whatever was in the buffer and look like data.
+   --  The window this volume was opened on, and no other.
+   procedure Same_Window (Self : Volume; BAR : Regions.Window) is
+   begin
+      if Self.Opened and then Regions.Base (BAR) /= Self.Window_Base then
+         raise Device_Misused with
+           "this volume was opened on a different register window; a"
+           & " doorbell rung on another controller reaches a queue it does"
+           & " not have";
+      end if;
+   end Same_Window;
+
    procedure Demand
      (Self : in out Volume; Answer : Completion; Doing : String)
    is
@@ -278,6 +292,7 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
          Queue_Entries, Self.IO_Sub.Device);
       Demand (Self, Run_Admin (Self, BAR), "creating a submission queue");
 
+      Self.Window_Base := Regions.Base (BAR);
       Self.Opened := True;
    end Open;
 

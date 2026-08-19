@@ -255,6 +255,15 @@ private
       IO_Phase     : Boolean := True;
       Next_ID      : U16 := 1;
       Status       : U16 := 0;
+      --  Where the register window was when this volume was opened.
+      --
+      --  Every operation takes the window again, which is what keeps a
+      --  Volume from holding a reference the language cannot vouch for —
+      --  and leaves nothing stopping the wrong window being passed. Two
+      --  controllers of one model is a case this harness creates on
+      --  purpose, and handing one volume the other's registers would ring
+      --  a doorbell on a device that never had the queue, corrupting both.
+      Window_Base  : System.Address := System.Null_Address;
       Serial_Text  : String (1 .. 20) := [others => ' '];
       Model_Text   : String (1 .. 40) := [others => ' '];
    end record;

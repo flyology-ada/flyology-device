@@ -1138,7 +1138,7 @@ package body Flyology_VFIO_QEMU.NVMe is
    -- Maximum_Copy_Sources --
    --------------------------------
 
-   function Maximum_Copy_Sources (Data : System.Address) return Natural is
+   function Maximum_Copy_Sources (Data : System.Address) return Positive is
       --  MSRC, at byte 80 of the Identify Namespace structure, and 0's
       --  based like everything else that counts here. A namespace with no
       --  limit reports zero, which is indistinguishable from a limit of

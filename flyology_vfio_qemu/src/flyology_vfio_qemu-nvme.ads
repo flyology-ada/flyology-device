@@ -748,9 +748,12 @@ package Flyology_VFIO_QEMU.NVMe is
      (Data : System.Address; Format : Copy_Format) return Boolean;
 
    --  The largest number of source ranges one copy may name.
+   --  The value is held one less than the real limit, so the smallest
+   --  answer is one and never zero.
+   --
    --  @param Data Address of the Identify Namespace data
-   --  @return The limit, or zero when the namespace states none
-   function Maximum_Copy_Sources (Data : System.Address) return Natural;
+   --  @return The limit, at least one
+   function Maximum_Copy_Sources (Data : System.Address) return Positive;
 
    --  Fills in one entry of a copy command's source range list.
    --
@@ -1055,7 +1058,8 @@ package Flyology_VFIO_QEMU.NVMe is
       Blocks       : Positive;
       Address      : U64;
       Continuation : U64 := 0)
-     with Pre => Submission.Kind = Namespace_IO;
+     with Pre => Submission.Kind = Namespace_IO
+                 and then Blocks <= 65_536;
 
    ---------------------------------------------------------------------
    --  Describing a buffer larger than a page
@@ -1173,7 +1177,11 @@ package Flyology_VFIO_QEMU.NVMe is
       Bytes          : Positive;
       Result_Address : U64;
       Namespace      : Namespace_Identifier := All_Namespaces)
-     with Pre => Submission.Kind = Admin;
+     --  A length in whole words, and at least one of them. The command
+     --  carries the count one less than the real number, so fewer than
+     --  four bytes wraps to a count of four thousand million rather than
+     --  being refused.
+     with Pre => Submission.Kind = Admin and then Bytes mod 4 = 0;
 
    --  Writes a command with no data transfer, such as Flush.
    --  @param Submission Where the submission queue lives
@@ -1206,7 +1214,11 @@ package Flyology_VFIO_QEMU.NVMe is
       Namespace   : Namespace_Identifier;
       First_Block : U64;
       Blocks      : Positive)
-     with Pre => Submission.Kind = Namespace_IO;
+     --  The count goes into the twelfth word one less than the real
+     --  number, and the bits above it are protection and cache flags. A
+     --  count past the field spills into them rather than being refused.
+     with Pre => Submission.Kind = Namespace_IO
+                 and then Blocks <= 65_536;
 
    --  Writes a command asking the controller to abandon another.
    --

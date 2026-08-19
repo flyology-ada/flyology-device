@@ -186,8 +186,16 @@ begin
                      "a payload of" & Natural'Image (Payload_Bytes)
                      & " bytes was written across several commands");
 
+                  --  Not "committed": a flush that returns says the
+                  --  controller accepted the command, and nothing here can
+                  --  see whether anything reached the medium. Claiming the
+                  --  stronger thing would be claiming what a read-back
+                  --  cannot establish either, since a read may be served
+                  --  from the same cache.
                   Disk.Flush (Volume, BAR);
-                  Harness.Check (True, "and the controller committed it");
+                  Harness.Check
+                    (True,
+                     "the controller accepted a flush without refusing it");
 
                   Disk.Read (Volume, BAR, Start_Block,
                              Disk.Byte_Sequence (Read_Back));
