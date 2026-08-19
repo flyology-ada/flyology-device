@@ -128,8 +128,9 @@ package Flyology_VFIO_QEMU.NVMe.Blocks is
    --  @param BAR The controller's mapped register window
    --  @param First_Block Where to start reading
    --  @param Into Where to put the data; its length sets how much is read
-   --  @exception Device_Misbehaved The controller refused, or the length is
-   --    not a whole number of blocks, or the range runs off the end
+   --  @exception Device_Misbehaved The controller refused
+   --  @exception Device_Misused The length is not a whole number of blocks,
+   --    or the range runs off the end
    procedure Read
      (Self        : in out Volume;
       BAR         : Regions.Window;
@@ -143,8 +144,9 @@ package Flyology_VFIO_QEMU.NVMe.Blocks is
    --  @param BAR The controller's mapped register window
    --  @param First_Block Where to start writing
    --  @param From The data; its length sets how much is written
-   --  @exception Device_Misbehaved The controller refused, or the length is
-   --    not a whole number of blocks, or the range runs off the end
+   --  @exception Device_Misbehaved The controller refused
+   --  @exception Device_Misused The length is not a whole number of blocks,
+   --    or the range runs off the end
    procedure Write
      (Self        : in out Volume;
       BAR         : Regions.Window;

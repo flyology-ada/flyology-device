@@ -380,7 +380,7 @@ begin
                      Disk.Read (Volume, BAR, Start_Block,
                                 Disk.Byte_Sequence (Ragged));
                   exception
-                     when Device_Misbehaved => Refused := True;
+                     when Device_Misused => Refused := True;
                   end;
                   Harness.Check
                     (Refused,
@@ -397,7 +397,7 @@ begin
                      Disk.Read (Volume, BAR, Volume.Block_Count,
                                 Disk.Byte_Sequence (Beyond));
                   exception
-                     when Device_Misbehaved => Refused := True;
+                     when Device_Misused => Refused := True;
                   end;
                   Harness.Check
                     (Refused,

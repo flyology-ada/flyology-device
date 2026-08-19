@@ -309,7 +309,7 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
       end if;
 
       if Total mod Self.Block_Size /= 0 then
-         raise Device_Misbehaved with
+         raise Device_Misused with
            "a transfer of" & Natural'Image (Total)
            & " bytes is not a whole number of"
            & Positive'Image (Self.Block_Size) & "-byte blocks";
@@ -321,7 +321,7 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
          if First_Block > Self.Blocks
            or else Wanted > Self.Blocks - First_Block
          then
-            raise Device_Misbehaved with
+            raise Device_Misused with
               "blocks" & U64'Image (First_Block) & " to"
               & U64'Image (First_Block + Wanted - 1)
               & " run past the end of a namespace holding"

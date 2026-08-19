@@ -505,6 +505,12 @@ package body Flyology_VFIO_QEMU.E1000E is
       At_Offset : constant Natural := Slot * Descriptor_Bytes;
       Status    : constant U8 := Get_8 (Ring.Host, At_Offset + 12);
    begin
+      --  The done bit is what says the length, the errors and the frame
+      --  itself have been written. Ordering the loads after it is the read
+      --  side of the release the doorbell writes perform, and it has no
+      --  observable effect under emulation.
+      Reg.Load_Fence;
+
       if Format = Legacy then
          return
            (Arrived  => (Status and Descriptor_Done) /= 0,
@@ -778,7 +784,7 @@ package body Flyology_VFIO_QEMU.E1000E is
          when 4096  =>
             return Interfaces.Shift_Left (3, 16) or Receive_Buffer_Extend;
          when others =>
-            raise Device_Misbehaved with
+            raise Device_Misused with
               "a receive buffer of" & Positive'Image (Bytes)
               & " bytes is not a size the control register can name";
       end case;

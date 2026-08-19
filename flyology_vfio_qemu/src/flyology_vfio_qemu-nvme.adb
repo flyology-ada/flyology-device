@@ -866,6 +866,13 @@ package body Flyology_VFIO_QEMU.NVMe is
       Entry_At : constant Natural := Slot * Completion_Entry_Bytes;
       Raw      : constant U16 := Get_16 (Queue.Host, Entry_At + 14);
    begin
+      --  The phase bit above is what says the rest of this entry — and the
+      --  buffer the command filled — is there to be read. Volatile keeps
+      --  the compiler from reordering those reads and says nothing to the
+      --  processor, which on a weakly ordered machine may satisfy them
+      --  from before the phase was written. Under emulation the two are
+      --  never separable; on silicon they are.
+      Reg.Load_Fence;
       return
         (Identifier => Get_16 (Queue.Host, Entry_At + 12),
          Status     => Interfaces.Shift_Right (Raw, 1),
@@ -1209,7 +1216,7 @@ package body Flyology_VFIO_QEMU.NVMe is
         Natural ((U64 (Bytes) + Span - 1) / Span);
    begin
       if (Buffer mod Span) /= 0 then
-         raise Device_Misbehaved with
+         raise Device_Misused with
            "a transfer buffer must start on a page boundary";
       end if;
 
@@ -1223,7 +1230,7 @@ package body Flyology_VFIO_QEMU.NVMe is
       end if;
 
       if Pages - 1 > Page_List_Capacity (Page_Bytes) then
-         raise Device_Misbehaved with
+         raise Device_Misused with
            "a transfer of" & Positive'Image (Bytes)
            & " bytes needs a chained page list, which this does not build";
       end if;

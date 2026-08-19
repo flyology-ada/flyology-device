@@ -56,6 +56,16 @@ package Flyology_VFIO_QEMU is
    --  crate is the one people run on an unfamiliar machine.
    Device_Not_Available : exception;
 
+   --  Raised when this crate was asked for something it cannot do.
+   --
+   --  A transfer that is not a whole number of blocks, a range past the end
+   --  of a namespace, a buffer size no register can name. These are the
+   --  caller's mistakes, and they were once reported as the device
+   --  misbehaving — which pollutes the one exception that means "something
+   --  below this is wrong" with the many ways of asking wrongly, and leaves
+   --  nobody able to trust the name.
+   Device_Misused : exception;
+
    --  Raised when a device did not behave as its specification says.
    --
    --  This is the interesting failure. It means either the device is not
