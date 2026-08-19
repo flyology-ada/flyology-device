@@ -318,10 +318,16 @@ begin
                      Answer : constant Controller.Completion := Run_IO;
                   begin
                      if Answer.Status /= 0 then
-                        Harness.Skip
-                          ("the copy and everything reading it back",
+                        --  A failure, not a skip. The namespace has already
+                        --  said it accepts two ranges, so a refusal here is
+                        --  the copy path breaking — and skipping would let
+                        --  this file's whole subject regress to
+                        --  always-refuse while the suite stayed green.
+                        Harness.Check
+                          (False,
                            "the controller refused a two-range copy with"
-                           & " status 0x" & Hex_16 (Answer.Status));
+                           & " status 0x" & Hex_16 (Answer.Status)
+                           & " after saying it accepts two");
                      else
                         Harness.Check
                           (True,

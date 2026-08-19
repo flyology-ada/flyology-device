@@ -47,7 +47,6 @@ with System;
 --  the interesting failures turned out to live in them.
 package Flyology_VFIO_QEMU.NVMe is
 
-   package DMA renames Flyology_DMA;
    package Regions renames Flyology_VFIO.Regions;
 
    --  QEMU's own vendor identifier, shared with its other devices.

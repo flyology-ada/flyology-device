@@ -196,7 +196,13 @@ procedure NVMe_Coverage_Tests is
       16#19#, 16#79#, 16#7A#, 16#7D#];
 
    --  What the functional suite reached when this floor was last reviewed.
-   --  A number below it means coverage has been lost.
+   --
+   --  Read what this measures, because it is narrower than it looks. The
+   --  lists above are maintained by hand: deleting a whole test file does
+   --  not move these numbers, and only a person noticing does. What the
+   --  floor does catch is the other direction — a controller that stops
+   --  implementing something the suite claims to drive, which is what a
+   --  QEMU upgrade would look like from here.
    Admin_Coverage_Floor : constant := 13;
    IO_Coverage_Floor    : constant := 12;
 
@@ -428,9 +434,10 @@ begin
                   & Natural'Image (Skipped) & " not probed");
                Harness.Check
                  (Admin_Covered >= Admin_Coverage_Floor,
-                  "the functional suite still drives at least"
-                  & Natural'Image (Admin_Coverage_Floor)
-                  & " of the admin commands this controller implements");
+                  "at least" & Natural'Image (Admin_Coverage_Floor)
+                  & " of the admin commands this controller implements are"
+                  & " on the list this file keeps of what the suite"
+                  & " drives");
 
                ---------------------------------------------------------
                --  The namespace command set needs a queue to run in
@@ -539,10 +546,10 @@ begin
                      "the controller implements namespace commands");
                   Harness.Check
                     (IO_Covered >= IO_Coverage_Floor,
-                     "the functional suite still drives at least"
-                     & Natural'Image (IO_Coverage_Floor)
+                     "at least" & Natural'Image (IO_Coverage_Floor)
                      & " of the namespace commands this controller"
-                     & " implements");
+                     & " implements are on the list this file keeps of what"
+                     & " the suite drives");
 
                   Controller.Write_Delete_Queue_Command
                     (Submission, Slot, Next_ID,

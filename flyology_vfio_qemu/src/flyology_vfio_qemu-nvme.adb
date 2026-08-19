@@ -5,6 +5,7 @@ with System.Storage_Elements;
 package body Flyology_VFIO_QEMU.NVMe is
 
    package Reg renames Flyology_VFIO.Registers;
+   package DMA renames Flyology_DMA;
    package SSE renames System.Storage_Elements;
 
    use type SSE.Storage_Offset;
