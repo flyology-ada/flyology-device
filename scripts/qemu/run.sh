@@ -22,7 +22,18 @@ state=${FLYOLOGY_DEVICE_VM_STATE:-"$repo_root/build/vm"}
 #  Unix socket paths are limited to about a hundred bytes, which a path
 #  under a repository in a home directory can exceed on its own. The sockets
 #  therefore live under a short symlink to the state directory.
-short=${FLYOLOGY_DEVICE_VM_SOCKETS:-/tmp/flyology-device-vm}
+#  A short path for the console socket, because a unix socket's name has a
+#  hard length limit that the repository's own path can exceed. Made unique
+#  per checkout: two clones on one machine, or two people, would otherwise
+#  share one socket directory and drive each other's guest.
+short=${FLYOLOGY_DEVICE_VM_SOCKETS:-/tmp/flyology-device-vm-$(printf '%s' \
+  "$repo_root" | cksum | cut -d' ' -f1)}
+
+#  Exported rather than left to console.py's own default. The two scripts
+#  once each had their own idea of where the socket lives, so overriding
+#  one moved the socket and left the other looking where it used to be.
+FLYOLOGY_DEVICE_VM_CONSOLE="$short/console.sock"
+export FLYOLOGY_DEVICE_VM_CONSOLE
 
 image_url=https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-nocloud-arm64.qcow2
 image_name=debian-12-nocloud-arm64.qcow2
@@ -146,9 +157,14 @@ do_up () {
   #  are later removed, and then hangs waiting for them. Rebuilding it
   #  whenever the device set changes costs a few seconds of boot and saves
   #  a confusing hang.
+  #  Both sides through command substitution, which strips trailing
+  #  newlines. The device list ends with one and the file read back does
+  #  not, so comparing them directly never matched and this rebuilt the
+  #  variable store on every boot — a guard that fired always, which looks
+  #  the same as a guard that works until the day it needs to not fire.
   device_stamp="$state/devices.stamp"
   if [ ! -f "$device_stamp" ] \
-    || [ "$(cat "$device_stamp")" != "$devices" ]
+    || [ "$(cat "$device_stamp")" != "$(printf '%s' "$devices")" ]
   then
     rm -f "$state/vars.fd"
     printf '%s' "$devices" > "$device_stamp"

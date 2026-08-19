@@ -390,8 +390,14 @@ package body Flyology_VFIO_QEMU.E1000E is
          Reg.Write_32 (BAR, Reg.Offset (Base + Ring_Tail), 0);
       end;
 
-      --  The inter-packet gap the datasheet gives for copper gigabit.
-      Reg.Write_32 (BAR, Transmit_Gap_Register, 8 or 16#0002_0000#);
+      --  The inter-packet gap the datasheet gives for copper gigabit:
+      --  eight, eight and six, in three fields ten bits apart. What was
+      --  here set the second field to a hundred and twenty-eight and the
+      --  third to nothing, because the bit meant for the second field's low
+      --  end was written four places too high. Nothing could see it: the
+      --  gap governs how long the device waits between frames on a shared
+      --  medium, and an emulated point-to-point link never waits.
+      Reg.Write_32 (BAR, Transmit_Gap_Register, 16#0060_2008#);
 
       Reg.Write_Release_32
         (BAR, Transmit_Control_Register,

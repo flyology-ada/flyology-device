@@ -53,6 +53,12 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
       Ring_Completion_Doorbell
         (BAR, Self.Stride, Admin_Queue,
          (Self.Admin_Slot + 1) mod Queue_Entries);
+      if Answer.Identifier /= Self.Next_ID then
+         raise Device_Misbehaved with
+           "the admin queue answered command"
+           & U16'Image (Answer.Identifier) & " when"
+           & U16'Image (Self.Next_ID) & " was submitted";
+      end if;
       Self.Admin_Slot := (Self.Admin_Slot + 1) mod Queue_Entries;
       if Self.Admin_Slot = 0 then
          Self.Admin_Phase := not Self.Admin_Phase;
@@ -76,6 +82,16 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
       Answer := Await_Completion (Self.IO_Comp, Self.IO_Slot, Self.IO_Phase);
       Ring_Completion_Doorbell
         (BAR, Self.Stride, IO_Queue, (Self.IO_Slot + 1) mod Queue_Entries);
+      --  Matched on the identifier as well as the phase. With one command
+      --  in flight the phase alone is enough, and if the phase logic is
+      --  ever wrong again this is what says so — instead of a stale
+      --  completion being accepted as this command's answer.
+      if Answer.Identifier /= Self.Next_ID then
+         raise Device_Misbehaved with
+           "the namespace queue answered command"
+           & U16'Image (Answer.Identifier) & " when"
+           & U16'Image (Self.Next_ID) & " was submitted";
+      end if;
       Self.IO_Slot := (Self.IO_Slot + 1) mod Queue_Entries;
       if Self.IO_Slot = 0 then
          Self.IO_Phase := not Self.IO_Phase;

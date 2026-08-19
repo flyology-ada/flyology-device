@@ -360,15 +360,62 @@ begin
                   "the device reported finishing with the transmit"
                   & " descriptor, which it writes by DMA");
 
+               --  Looked for, not waited for at a fixed slot. The wire
+               --  carries a peer with a mind of its own, and its broadcasts
+               --  arrive whenever they arrive: one landing in slot zero
+               --  first would make every check below read that frame
+               --  instead of the reply, and report on its contents with
+               --  perfect confidence.
                declare
-                  Arrived : constant NIC.Received_Frame :=
-                    NIC.Await_Received (Receive_Ring, Slot => 0);
+                  Reply_Slot : Natural := 0;
+                  Arrived    : NIC.Received_Frame;
 
-                  Reply : array (0 .. 2047) of U8
-                    with Import, Volatile,
-                         Address =>
-                           Host + SSE.Storage_Offset (Receive_Buffers_Offset);
+                  function Is_Address_Reply (Slot : Natural) return Boolean is
+                     Bytes : array (0 .. 63) of U8
+                       with Import, Volatile,
+                            Address =>
+                              Host
+                              + SSE.Storage_Offset (Receive_Buffers_Offset)
+                              + SSE.Storage_Offset
+                                  (Slot * NIC.Receive_Buffer_Bytes);
+                  begin
+                     --  An address resolution reply, and one about the
+                     --  address that was asked about.
+                     return Bytes (12) = 16#08# and then Bytes (13) = 16#06#
+                       and then Bytes (20) = 0 and then Bytes (21) = 2
+                       and then Bytes (28) = Peer_Address (1)
+                       and then Bytes (31) = Peer_Address (4);
+                  end Is_Address_Reply;
                begin
+                  Arrived := (Arrived => False, Length => 0,
+                              Complete => False, Errors => 0, others => <>);
+                  Searching :
+                  for Attempt in 1 .. 400 loop
+                     for Slot in 0 .. Ring_Slots - 1 loop
+                        declare
+                           Seen : constant NIC.Received_Frame :=
+                             NIC.Peek_Received (Receive_Ring, Slot);
+                        begin
+                           if Seen.Arrived and then Is_Address_Reply (Slot)
+                           then
+                              Arrived := Seen;
+                              Reply_Slot := Slot;
+                              exit Searching;
+                           end if;
+                        end;
+                     end loop;
+                     delay 0.005;
+                  end loop Searching;
+
+                  declare
+                     Reply : array (0 .. 2047) of U8
+                       with Import, Volatile,
+                            Address =>
+                              Host
+                              + SSE.Storage_Offset (Receive_Buffers_Offset)
+                              + SSE.Storage_Offset
+                                  (Reply_Slot * NIC.Receive_Buffer_Bytes);
+                  begin
                   Harness.Check (Arrived.Arrived, "a frame arrived");
                   Harness.Check
                     (Arrived.Complete,
@@ -417,7 +464,11 @@ begin
                   end;
 
                   NIC.Recycle_Received
-                    (BAR, Receive_Ring, Slot => 0, Buffer => Receive_Buffers);
+                    (BAR, Receive_Ring, Slot => Reply_Slot,
+                     Buffer => Receive_Buffers
+                               + U64 (Reply_Slot)
+                                 * U64 (NIC.Receive_Buffer_Bytes));
+                  end;
                end;
 
                ------------------------------------------------------

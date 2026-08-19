@@ -608,8 +608,6 @@ package Flyology_VFIO_QEMU.NVMe is
    function Appended_At
      (Queue : Queue_Location; Slot : Natural) return U64;
 
-   --  An opcode no command set defines, for checking that a controller
-   --  refuses what it does not implement rather than ignoring it.
    --  Which directive a Send or Receive concerns.
    type Directive_Kind is new U8;
 
@@ -791,6 +789,8 @@ package Flyology_VFIO_QEMU.NVMe is
       Format       : Copy_Format := Format_32_Byte)
      with Pre => Submission.Kind = Namespace_IO and then Sources <= 256;
 
+   --  An opcode no command set defines, for checking that a controller
+   --  refuses what it does not implement rather than ignoring it.
    Opcode_Undefined : constant Admin_Opcode := 16#FE#;
 
    --  Feature: how many I/O queues the controller will allow.
