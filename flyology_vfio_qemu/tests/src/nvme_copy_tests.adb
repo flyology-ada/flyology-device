@@ -37,8 +37,8 @@ with Flyology_VFIO.Registers;
 with Flyology_VFIO_QEMU;
 with Flyology_VFIO_QEMU.NVMe;
 with Harness;
+with System;
 with Interfaces;
-with System.Storage_Elements;
 
 procedure NVMe_Copy_Tests is
    use Flyology_VFIO;
@@ -49,14 +49,10 @@ procedure NVMe_Copy_Tests is
    package DMA renames Flyology_DMA;
    package Device_Regions renames Flyology_VFIO.Regions;
    package Reg renames Flyology_VFIO.Registers;
-   package SSE renames System.Storage_Elements;
 
    use type DMA.Byte_Count;
-   use type DMA.IOVA_Address;
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_16;
-   use type System.Address;
-   use type SSE.Storage_Offset;
 
    Window_Base : constant DMA.IOVA_Address := 16#0400_0000#;
 
@@ -121,18 +117,22 @@ begin
                  DMA.Mappers.Map_Region
                    (Backend'Access, Area, Window_Base,
                     DMA.Mappers.Device_Reads_And_Writes);
-               pragma Unreferenced (Bound);
+               --  Both addresses come from the mapping rather than being
+               --  recomputed beside it. It knows its own extent, so an
+               --  offset that would put a structure past the end of the
+               --  region is refused here instead of becoming an address
+               --  the device faults on.
+               function At_Host
+                 (Offset : DMA.Byte_Count; Extent : DMA.Byte_Count := 1)
+                  return System.Address
+               is (Bound.Host_At (Offset, Extent));
 
-               Host : constant System.Address :=
-                 DMA.Regions.Base_Address (Area);
+               function At_Device
+                 (Offset : DMA.Byte_Count; Extent : DMA.Byte_Count := 1)
+                  return Device_Address
+               is (Bound.Device_At (Offset, Extent));
 
-               function At_Host (Offset : DMA.Byte_Count)
-                 return System.Address
-               is (Host + SSE.Storage_Offset (Offset));
-
-               function At_Device (Offset : DMA.Byte_Count)
-                 return Device_Address
-               is (Window_Base + Device_Address (Offset));
+               Host : constant System.Address := Bound.Host_At (0);
 
                Admin_Sub : constant Controller.Queue_Location :=
                  (Kind    => Controller.Admin,

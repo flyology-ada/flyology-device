@@ -1,3 +1,5 @@
+with System.Storage_Elements;
+
 package body Flyology_DMA.Mappers is
 
 
@@ -44,6 +46,38 @@ package body Flyology_DMA.Mappers is
          Result.Active    := True;
       end return;
    end Map_Region;
+
+   -------------
+   -- Host_At --
+   -------------
+
+   function Host_At
+     (Self   : Mapping;
+      Offset : Byte_Count;
+      Extent : Byte_Count := 1) return System.Address
+   is
+      --  The extent is checked by the precondition and not needed here;
+      --  naming it in the signature is what lets a caller state how much
+      --  it is about to put at this address.
+      pragma Unreferenced (Extent);
+      use type System.Storage_Elements.Storage_Offset;
+   begin
+      return Self.Host + System.Storage_Elements.Storage_Offset (Offset);
+   end Host_At;
+
+   ---------------
+   -- Device_At --
+   ---------------
+
+   function Device_At
+     (Self   : Mapping;
+      Offset : Byte_Count;
+      Extent : Byte_Count := 1) return IOVA_Address
+   is
+      pragma Unreferenced (Extent);
+   begin
+      return Self.Device + IOVA_Address (Offset);
+   end Device_At;
 
    -------------
    -- Release --

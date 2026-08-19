@@ -50,8 +50,8 @@ with Flyology_VFIO.Registers;
 with Flyology_VFIO_QEMU;
 with Flyology_VFIO_QEMU.NVMe;
 with Harness;
+with System;
 with Interfaces;
-with System.Storage_Elements;
 
 procedure NVMe_Coverage_Tests is
    use Flyology_VFIO;
@@ -62,14 +62,10 @@ procedure NVMe_Coverage_Tests is
    package DMA renames Flyology_DMA;
    package Device_Regions renames Flyology_VFIO.Regions;
    package Reg renames Flyology_VFIO.Registers;
-   package SSE renames System.Storage_Elements;
 
    use type DMA.Byte_Count;
-   use type DMA.IOVA_Address;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
-   use type System.Address;
-   use type SSE.Storage_Offset;
 
    Window_Base : constant DMA.IOVA_Address := 16#0400_0000#;
 
@@ -271,23 +267,35 @@ begin
                  DMA.Mappers.Map_Region
                    (Backend'Access, Area, Window_Base,
                     DMA.Mappers.Device_Reads_And_Writes);
-               pragma Unreferenced (Bound);
+               --  Both addresses come from the mapping rather than being
+               --  recomputed beside it. It knows its own extent, so an offset
+               --  that would put a structure past the end of the region is
+               --  refused here instead of becoming an address the device
+               --  faults on.
+               function At_Host
+                 (Offset : DMA.Byte_Count; Extent : DMA.Byte_Count := 1)
+                  return System.Address
+               is (Bound.Host_At (Offset, Extent));
 
-               Host : constant System.Address :=
-                 DMA.Regions.Base_Address (Area);
+               function At_Device
+                 (Offset : DMA.Byte_Count; Extent : DMA.Byte_Count := 1)
+                  return Device_Address
+               is (Bound.Device_At (Offset, Extent));
+
+               Host : constant System.Address := Bound.Host_At (0);
 
                Submission : constant Controller.Queue_Location :=
                  (Kind    => Controller.Admin,
-                  Host    => Host + SSE.Storage_Offset (Submission_Offset),
-                  Device  => Window_Base + Device_Address (Submission_Offset),
+                  Host    => At_Host (Submission_Offset),
+                  Device  => At_Device (Submission_Offset),
                   Entries => Queue_Entries);
                Completion : constant Controller.Queue_Location :=
                  (Kind    => Controller.Admin,
-                  Host    => Host + SSE.Storage_Offset (Completion_Offset),
-                  Device  => Window_Base + Device_Address (Completion_Offset),
+                  Host    => At_Host (Completion_Offset),
+                  Device  => At_Device (Completion_Offset),
                   Entries => Queue_Entries);
                Buffer_Device : constant Device_Address :=
-                 Window_Base + Device_Address (Buffer_Offset);
+                 At_Device (Buffer_Offset);
 
                Everything : array (1 .. Scratch_Bytes) of U8
                  with Import, Volatile, Address => Host;
@@ -450,16 +458,16 @@ begin
                   IO_Sub : constant Controller.Queue_Location :=
                     (Kind    => Controller.Namespace_IO,
                      Host    =>
-                       Host + SSE.Storage_Offset (IO_Submission_Offset),
+                       At_Host (IO_Submission_Offset),
                      Device  =>
-                       Window_Base + Device_Address (IO_Submission_Offset),
+                       At_Device (IO_Submission_Offset),
                      Entries => Queue_Entries);
                   IO_Comp : constant Controller.Queue_Location :=
                     (Kind    => Controller.Namespace_IO,
                      Host    =>
-                       Host + SSE.Storage_Offset (IO_Completion_Offset),
+                       At_Host (IO_Completion_Offset),
                      Device  =>
-                       Window_Base + Device_Address (IO_Completion_Offset),
+                       At_Device (IO_Completion_Offset),
                      Entries => Queue_Entries);
                   IO_Slot  : Natural := 0;
                   IO_Phase : Boolean := True;

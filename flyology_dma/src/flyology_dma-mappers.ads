@@ -122,6 +122,44 @@ package Flyology_DMA.Mappers is
    --  @return True until Release or finalization removes it
    function Is_Live (Self : Mapping) return Boolean;
 
+   --  The two addresses of a byte inside the mapping.
+   --
+   --  A caller carving structures out of one mapped region — a queue here,
+   --  a ring there, a buffer after them — needs both addresses of each, and
+   --  the arithmetic is the same every time: add the offset to the base.
+   --  Doing it at the call site means doing it twice, once per address,
+   --  with nothing to say the two offsets were the same number or that
+   --  either lands inside the region.
+   --
+   --  Extent is how much is being placed there, so that a structure
+   --  starting inside the region and ending outside it is refused rather
+   --  than silently handed an address the device will fault on. It
+   --  defaults to one byte, which is the weakest claim worth making.
+   --
+   --  @param Self The mapping
+   --  @param Offset How far into the mapping, in bytes
+   --  @param Extent How many bytes are being placed there
+   --  @return The address of that byte
+   function Host_At
+     (Self   : Mapping;
+      Offset : Byte_Count;
+      Extent : Byte_Count := 1) return System.Address
+     with Pre => Is_Live (Self)
+                 and then Extent <= Length (Self)
+                 and then Offset <= Length (Self) - Extent;
+
+   --  @param Self The mapping
+   --  @param Offset How far into the mapping, in bytes
+   --  @param Extent How many bytes are being placed there
+   --  @return The device address of that byte
+   function Device_At
+     (Self   : Mapping;
+      Offset : Byte_Count;
+      Extent : Byte_Count := 1) return IOVA_Address
+     with Pre => Is_Live (Self)
+                 and then Extent <= Length (Self)
+                 and then Offset <= Length (Self) - Extent;
+
    --  Removes the mapping now rather than at finalization.
    --
    --  Idempotent: releasing an already-released mapping does nothing, so a

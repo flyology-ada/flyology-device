@@ -38,7 +38,6 @@ with Flyology_VFIO_QEMU.NVMe;
 with Flyology_VFIO_QEMU.NVMe.Blocks;
 with Harness;
 with Interfaces;
-with System;
 
 procedure NVMe_Blocks_Tests is
    use Flyology_VFIO;
@@ -50,14 +49,15 @@ procedure NVMe_Blocks_Tests is
    package DMA renames Flyology_DMA;
    package Device_Regions renames Flyology_VFIO.Regions;
 
-   use type DMA.Byte_Count;
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_64;
 
    Window_Base : constant DMA.IOVA_Address := 16#0400_0000#;
 
-   --  Deliberately modest. A larger scratch area would let every transfer
-   --  below fit in one command, and the chunking would then never run.
+   --  Deliberately modest. A larger region would let every transfer below
+   --  fit in one command, and the chunking would then never run — which the
+   --  check on that premise caught the moment the volume started taking the
+   --  whole region instead of a size named here.
    Scratch_Bytes : constant := 64 * 1024;
 
    --  Several times the largest single transfer that fits in that scratch,
@@ -100,7 +100,7 @@ begin
          declare
             Backend : aliased DMA_Mapper.Container_Mapper;
             Area : constant DMA.Regions.Region :=
-              DMA.Regions.Create (2 * 1024 * 1024, DMA.Regular_Pages);
+              DMA.Regions.Create (Scratch_Bytes, DMA.Regular_Pages);
          begin
             DMA_Mapper.Bind (Backend, Container);
 
@@ -109,15 +109,10 @@ begin
                  DMA.Mappers.Map_Region
                    (Backend'Access, Area, Window_Base,
                     DMA.Mappers.Device_Reads_And_Writes);
-               pragma Unreferenced (Bound);
-
-               Host : constant System.Address :=
-                 DMA.Regions.Base_Address (Area);
 
                Volume : Disk.Volume;
             begin
-               Disk.Open
-                 (Volume, BAR, Host, Window_Base, Scratch_Bytes);
+               Disk.Open (Volume, BAR, Bound);
 
                Harness.Check
                  (Volume.Is_Open,

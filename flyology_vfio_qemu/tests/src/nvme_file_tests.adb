@@ -56,7 +56,6 @@ with Flyology_VFIO_QEMU.NVMe;
 with Flyology_VFIO_QEMU.NVMe.Blocks;
 with Harness;
 with Interfaces;
-with System;
 
 procedure NVMe_File_Tests is
    use Flyology_VFIO;
@@ -124,7 +123,6 @@ procedure NVMe_File_Tests is
    Written_By_Filesystem : constant String := Filesystem_Prefix & Token;
    Written_By_Driver     : constant String := Driver_Prefix & Token;
 
-   Scratch_Bytes : constant := 128 * 1024;
 
    function Mode return String is
      (if Ada.Command_Line.Argument_Count >= 1
@@ -234,15 +232,9 @@ procedure NVMe_File_Tests is
                  DMA.Mappers.Map_Region
                    (Backend'Access, Area, Window_Base,
                     DMA.Mappers.Device_Reads_And_Writes);
-               pragma Unreferenced (Bound);
-
                Volume : Disk.Volume;
-               Host : constant System.Address :=
-                 DMA.Regions.Base_Address (Area);
             begin
-               Disk.Open
-                 (Volume, BAR, Host, Window_Base, Scratch_Bytes,
-                  Namespace);
+               Disk.Open (Volume, BAR, Bound, Namespace);
                Harness.Check
                  (Volume.Is_Open,
                   "the namespace the filesystem lives on opened as a"

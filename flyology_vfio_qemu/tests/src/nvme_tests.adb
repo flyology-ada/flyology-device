@@ -31,8 +31,8 @@ with Flyology_VFIO.Registers;
 with Flyology_VFIO_QEMU;
 with Flyology_VFIO_QEMU.NVMe;
 with Harness;
+with System;
 with Interfaces;
-with System.Storage_Elements;
 
 procedure NVMe_Tests is
    use Flyology_VFIO;
@@ -44,7 +44,6 @@ procedure NVMe_Tests is
    package Device_Regions renames Flyology_VFIO.Regions;
    package IRQ renames Flyology_VFIO.Interrupts;
    package Reg renames Flyology_VFIO.Registers;
-   package SSE renames System.Storage_Elements;
 
    use type DMA.Byte_Count;
    use type DMA.IOVA_Address;
@@ -52,8 +51,6 @@ procedure NVMe_Tests is
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
-   use type System.Address;
-   use type SSE.Storage_Offset;
 
    Window_Base : constant DMA.IOVA_Address := 16#0400_0000#;
 
@@ -231,61 +228,73 @@ begin
                   --  Held for its lifetime, not for its value: the mapping
                   --  exists as long as this block does, and goes away with
                   --  it before the container closes.
-                  pragma Unreferenced (Bound);
+                  --  Both addresses come from the mapping rather than being
+                  --  recomputed beside it. It knows its own extent, so an offset
+                  --  that would put a structure past the end of the region is
+                  --  refused here instead of becoming an address the device
+                  --  faults on.
+                  function At_Host
+                    (Offset : DMA.Byte_Count; Extent : DMA.Byte_Count := 1)
+                     return System.Address
+                  is (Bound.Host_At (Offset, Extent));
 
-                  Host : constant System.Address :=
-                    DMA.Regions.Base_Address (Area);
+                  function At_Device
+                    (Offset : DMA.Byte_Count; Extent : DMA.Byte_Count := 1)
+                     return Device_Address
+                  is (Bound.Device_At (Offset, Extent));
+
+                  Host : constant System.Address := Bound.Host_At (0);
 
                   Submission : constant Controller.Queue_Location :=
                     (Kind    => Controller.Admin,
-                     Host    => Host + SSE.Storage_Offset (Submission_Offset),
-                     Device  => Window_Base + Device_Address (Submission_Offset),
+                     Host    => At_Host (Submission_Offset),
+                     Device  => At_Device (Submission_Offset),
                      Entries => Queue_Entries);
                   Completion : constant Controller.Queue_Location :=
                     (Kind    => Controller.Admin,
-                     Host    => Host + SSE.Storage_Offset (Completion_Offset),
-                     Device  => Window_Base + Device_Address (Completion_Offset),
+                     Host    => At_Host (Completion_Offset),
+                     Device  => At_Device (Completion_Offset),
                      Entries => Queue_Entries);
 
                   Identify_Host : constant System.Address :=
-                    Host + SSE.Storage_Offset (Identify_Offset);
+                    At_Host (Identify_Offset);
                   Identify_Device : constant Device_Address :=
-                    Window_Base + Device_Address (Identify_Offset);
+                    At_Device (Identify_Offset);
 
                   Namespace_Host : constant System.Address :=
-                    Host + SSE.Storage_Offset (Namespace_Info_Offset);
+                    At_Host (Namespace_Info_Offset);
                   Namespace_Info_Device : constant Device_Address :=
-                    Window_Base + Device_Address (Namespace_Info_Offset);
+                    At_Device (Namespace_Info_Offset);
 
                   IO_Submission : constant Controller.Queue_Location :=
                     (Kind    => Controller.Namespace_IO,
                      Host    =>
-                       Host + SSE.Storage_Offset (IO_Submission_Offset),
+                       At_Host (IO_Submission_Offset),
                      Device  =>
-                       Window_Base + Device_Address (IO_Submission_Offset),
+                       At_Device (IO_Submission_Offset),
                      Entries => Queue_Entries);
                   IO_Completion : constant Controller.Queue_Location :=
                     (Kind    => Controller.Namespace_IO,
                      Host    =>
-                       Host + SSE.Storage_Offset (IO_Completion_Offset),
+                       At_Host (IO_Completion_Offset),
                      Device  =>
-                       Window_Base + Device_Address (IO_Completion_Offset),
+                       At_Device (IO_Completion_Offset),
                      Entries => Queue_Entries);
 
                   IO_Submission_Device : constant Device_Address := IO_Submission.Device;
                   IO_Completion_Device : constant Device_Address := IO_Completion.Device;
 
                   Log_Host : constant System.Address :=
-                    Host + SSE.Storage_Offset (Log_Buffer_Offset);
+                    At_Host (Log_Buffer_Offset);
                   Log_Device : constant Device_Address :=
-                    Window_Base + Device_Address (Log_Buffer_Offset);
+                    At_Device (Log_Buffer_Offset);
 
                   Pointer_List_Host : constant System.Address :=
-                    Host + SSE.Storage_Offset (Pointer_List_Offset);
+                    At_Host (Pointer_List_Offset);
                   Pointer_List_Device : constant Device_Address :=
-                    Window_Base + Device_Address (Pointer_List_Offset);
+                    At_Device (Pointer_List_Offset);
                   Large_Device : constant Device_Address :=
-                    Window_Base + Device_Address (Large_Buffer_Offset);
+                    At_Device (Large_Buffer_Offset);
 
                   Log_Bytes : array (0 .. 511) of U8
                     with Import, Volatile, Address => Log_Host;
@@ -294,21 +303,21 @@ begin
                   Large_Bytes : array (0 .. 4096 * Large_Buffer_Pages - 1)
                     of U8 with Import, Volatile,
                          Address =>
-                           Host + SSE.Storage_Offset (Large_Buffer_Offset);
+                           At_Host (Large_Buffer_Offset);
 
                   Write_Buffer_Device : constant Device_Address :=
-                    Window_Base + Device_Address (Write_Buffer_Offset);
+                    At_Device (Write_Buffer_Offset);
                   Read_Buffer_Device : constant Device_Address :=
-                    Window_Base + Device_Address (Read_Buffer_Offset);
+                    At_Device (Read_Buffer_Offset);
 
                   Write_Bytes : array (1 .. 4096) of U8
                     with Import, Volatile,
                          Address =>
-                           Host + SSE.Storage_Offset (Write_Buffer_Offset);
+                           At_Host (Write_Buffer_Offset);
                   Read_Bytes : array (1 .. 4096) of U8
                     with Import, Volatile,
                          Address =>
-                           Host + SSE.Storage_Offset (Read_Buffer_Offset);
+                           At_Host (Read_Buffer_Offset);
 
                   Block_Bytes : Positive := 512;
                   Block_Count : U64 := 0;
@@ -1109,7 +1118,7 @@ begin
                         --  the controller fetches by DMA.
                         declare
                            List_Host : constant System.Address :=
-                             Host + SSE.Storage_Offset (Pointer_List_Offset);
+                             At_Host (Pointer_List_Offset);
                         begin
                            Controller.Write_Deallocate_Range
                              (List_Host, 0,

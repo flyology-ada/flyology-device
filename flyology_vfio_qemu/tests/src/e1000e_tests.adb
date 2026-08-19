@@ -284,31 +284,43 @@ begin
                  DMA.Mappers.Map_Region
                    (Backend'Access, Area, Window_Base,
                     DMA.Mappers.Device_Reads_And_Writes);
-               pragma Unreferenced (Bound);
+               --  Both addresses come from the mapping rather than being
+               --  recomputed beside it. It knows its own extent, so an offset
+               --  that would put a structure past the end of the region is
+               --  refused here instead of becoming an address the device
+               --  faults on.
+               function At_Host
+                 (Offset : DMA.Byte_Count; Extent : DMA.Byte_Count := 1)
+                  return System.Address
+               is (Bound.Host_At (Offset, Extent));
 
-               Host : constant System.Address :=
-                 DMA.Regions.Base_Address (Area);
+               function At_Device
+                 (Offset : DMA.Byte_Count; Extent : DMA.Byte_Count := 1)
+                  return Device_Address
+               is (Bound.Device_At (Offset, Extent));
+
+               Host : constant System.Address := Bound.Host_At (0);
 
                Receive_Ring : constant NIC.Ring_Location :=
-                 (Host   => Host + SSE.Storage_Offset (Receive_Ring_Offset),
-                  Device => Window_Base + Device_Address (Receive_Ring_Offset),
+                 (Host   => At_Host (Receive_Ring_Offset),
+                  Device => At_Device (Receive_Ring_Offset),
                   Count  => Ring_Slots,
                   Queue  => 0);
                Transmit_Ring : constant NIC.Ring_Location :=
-                 (Host   => Host + SSE.Storage_Offset (Transmit_Ring_Offset),
-                  Device => Window_Base + Device_Address (Transmit_Ring_Offset),
+                 (Host   => At_Host (Transmit_Ring_Offset),
+                  Device => At_Device (Transmit_Ring_Offset),
                   Count  => Ring_Slots,
                   Queue  => 0);
 
                Receive_Buffers : constant Device_Address :=
-                 Window_Base + Device_Address (Receive_Buffers_Offset);
+                 At_Device (Receive_Buffers_Offset);
                Transmit_Frame : constant Device_Address :=
-                 Window_Base + Device_Address (Transmit_Frame_Offset);
+                 At_Device (Transmit_Frame_Offset);
 
                Frame_Bytes : array (0 .. 2047) of U8
                  with Import, Volatile,
                       Address =>
-                        Host + SSE.Storage_Offset (Transmit_Frame_Offset);
+                        At_Host (Transmit_Frame_Offset);
 
                Ours : constant NIC.MAC_Address := NIC.Hardware_Address (BAR);
                Request_Length : constant := 42;

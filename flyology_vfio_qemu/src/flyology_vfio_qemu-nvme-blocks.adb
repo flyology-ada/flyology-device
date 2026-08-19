@@ -167,21 +167,24 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
    --------------
 
    procedure Open
-     (Self       : in out Volume;
-      BAR        : Regions.Window;
-      Scratch    : System.Address;
-      Scratch_At : Device_Address;
-      Bytes      : Positive;
-      Namespace  : Namespace_Identifier := 1)
+     (Self      : in out Volume;
+      BAR       : Regions.Window;
+      Scratch   : Flyology_DMA.Mappers.Mapping;
+      Namespace : Namespace_Identifier := 1)
    is
       Capabilities : constant U64 :=
         Reg.Read_64 (BAR, Capabilities_Register);
 
+      Bytes : constant Positive :=
+        Positive (Flyology_DMA.Mappers.Length (Scratch));
+
       function At_Host (Offset : Natural) return System.Address
-      is (Scratch + SSE.Storage_Offset (Offset));
+      is (Flyology_DMA.Mappers.Host_At
+            (Scratch, Flyology_DMA.Byte_Count (Offset)));
 
       function At_Device (Offset : Natural) return Device_Address
-      is (Scratch_At + Device_Address (Offset));
+      is (Flyology_DMA.Mappers.Device_At
+            (Scratch, Flyology_DMA.Byte_Count (Offset)));
    begin
       Self.Opened := False;
       Self.Namespace := Namespace;
@@ -215,7 +218,7 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
 
       declare
          Blank : array (1 .. Buffer_Offset) of U8
-           with Import, Volatile, Address => Scratch;
+           with Import, Volatile, Address => At_Host (0);
       begin
          --  Only the structures, not the transfer buffer: a caller may
          --  have put something there already and clearing it would be a

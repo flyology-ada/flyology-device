@@ -1,4 +1,6 @@
+with Flyology_DMA.Mappers;
 with System;
+use type Flyology_DMA.Byte_Count;
 
 --  An NVMe namespace as a thing you read and write bytes on.
 --
@@ -44,28 +46,27 @@ package Flyology_VFIO_QEMU.NVMe.Blocks is
 
    --  Brings the controller up and prepares one namespace for use.
    --
-   --  The scratch area must be host memory already mapped for the device to
-   --  read and write, and Scratch_At must be the device address of the same
-   --  memory. Those being the same address is the mistake this whole
-   --  repository is arranged around; here they are two parameters so that
-   --  passing one twice does not typecheck into something plausible.
+   --  The working memory is given as the mapping itself rather than as its
+   --  two addresses and its length. Those three have to agree, and passing
+   --  them separately is three chances for them not to — which is the
+   --  mistake this whole repository is arranged around, arriving by the
+   --  side door. A mapping cannot disagree with itself, and it knows when
+   --  it has been released.
    --
    --  @param Self The volume to open
    --  @param BAR The controller's mapped register window
-   --  @param Scratch Host address of the working memory
-   --  @param Scratch_At Device address of that same memory
-   --  @param Bytes How large the working memory is
+   --  @param Scratch The mapped working memory
    --  @param Namespace Which namespace to prepare
    --  @exception Device_Misbehaved The controller refused part of the
    --    bring-up, or the namespace reports a shape this cannot use
    procedure Open
-     (Self       : in out Volume;
-      BAR        : Regions.Window;
-      Scratch    : System.Address;
-      Scratch_At : Device_Address;
-      Bytes      : Positive;
-      Namespace  : Namespace_Identifier := 1)
-     with Pre => Bytes >= Minimum_Scratch_Bytes;
+     (Self      : in out Volume;
+      BAR       : Regions.Window;
+      Scratch   : Flyology_DMA.Mappers.Mapping;
+      Namespace : Namespace_Identifier := 1)
+     with Pre => Flyology_DMA.Mappers.Is_Live (Scratch)
+                 and then Flyology_DMA.Mappers.Length (Scratch)
+                          >= Minimum_Scratch_Bytes;
 
    --  Stops the controller and forgets the queues.
    --  @param Self The volume to close
