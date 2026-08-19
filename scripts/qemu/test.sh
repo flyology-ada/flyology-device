@@ -75,7 +75,15 @@ run_in_guest () {
   "$repo_root/scripts/qemu/run.sh" exec "$1"
 }
 
-run_in_guest 'mkdir -p /mnt/share; mountpoint -q /mnt/share || mount -t 9p -o trans=virtio,version=9p2000.L share /mnt/share; echo 512 > /proc/sys/vm/nr_hugepages; echo 1 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null; grep -i hugepages_total /proc/meminfo'
+#  Checked on what it achieved rather than on the last command's status.
+#  Without the final test this step succeeds when the share failed to
+#  mount, and the failure reappears much later as every suite exiting 127.
+run_in_guest 'mkdir -p /mnt/share
+  mountpoint -q /mnt/share || mount -t 9p -o trans=virtio,version=9p2000.L share /mnt/share
+  echo 512 > /proc/sys/vm/nr_hugepages
+  echo 1 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null
+  grep -i hugepages_total /proc/meminfo
+  mountpoint -q /mnt/share' || status=1
 
 status=0
 for suite in scalar_tests address_space_tests region_tests mapper_tests \
@@ -104,7 +112,13 @@ for d in /sys/bus/pci/devices/*; do
   echo "$a" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null
   printf "bound %s (%s:%s) group %s\n" "$a" "$(cat $d/vendor)" \
     "$(cat $d/device)" "$(basename $(readlink $d/iommu_group))"
-done'
+  [ "$(basename $(readlink $d/driver))" = vfio-pci ] || bad=yes
+done
+#  Every step above is silenced, and the status of the loop is the status
+#  of its last printf, so without this the sweep reports success having
+#  bound nothing. The failure would surface much later, as a test skipping
+#  because it could not find its device.
+[ "${bad:-}" != yes ]' || status=1
 
 #  The peer the frame tests talk to. It is the guest's own kernel on the
 #  same virtual hub as the controller under test, so a reply comes from a
@@ -127,7 +141,12 @@ run_in_guest "for n in /sys/class/net/*; do
   ip addr flush dev \$i 2>/dev/null
   ip addr add $peer_ip/24 dev \$i
   printf 'peer %s is %s at %s\n' \$i $peer_mac $peer_ip
-done"
+  found=yes
+done
+#  A loop whose body never ran leaves the status of the last thing that
+#  did. Without this the step succeeds when no interface carries that
+#  address, and the frame tests then skip for a reason nobody chose.
+[ \"\${found:-}\" = yes ]" || status=1
 
 #  The values the guest was started with are passed to the tests that read
 #  them back out of a device, so that the harness and the tests cannot
@@ -165,7 +184,11 @@ give_nvme_to () {
     echo $1 > \$d/driver_override
     echo $nvme_address > /sys/bus/pci/drivers/$1/bind 2>/dev/null
     sleep 1
-    printf 'nvme is now with %s\n' \$(basename \$(readlink \$d/driver))"
+    printf 'nvme is now with %s\n' \$(basename \$(readlink \$d/driver))
+    #  Reported by what actually holds the device, not by the attempt.
+    #  Every step above is silenced, so without this the function succeeds
+    #  whether or not the bind did.
+    [ \"\$(basename \$(readlink \$d/driver))\" = '$1' ]" || return 1
 }
 
 #  A filesystem made fresh every run, rather than one kept between them.
@@ -182,7 +205,7 @@ fs_token=$(date +%H%M%S)
 fs_corpus="$corpus FLYOLOGY_DEVICE_FS_TOKEN=$fs_token"
 
 printf '\n== nvme_file_tests ==\n'
-give_nvme_to nvme
+give_nvme_to nvme || status=1
 #  Found by its namespace identifier rather than by its name, because they
 #  are not the same number and nothing says they should be: a namespace
 #  that starts detached takes an identifier and no name, so namespace four
@@ -195,25 +218,33 @@ find_namespace='n=""
   done'
 
 run_in_guest "$find_namespace
-  [ -b \"\$n\" ] || { echo 'no block device for namespace 4'; exit 1; }
+  #  Reported, not exited. These commands are evaluated by the guest's
+  #  login shell, so an exit here ends that shell: the marker the harness
+  #  waits for never arrives, and an intended fast failure becomes a
+  #  ten-minute timeout attributed to the wrong thing.
+  if [ ! -b \"\$n\" ]; then echo 'no block device for namespace 4'; false; fi
   mkdir -p /mnt/nvme
   mkfs.ext2 -q -F -L FLYOLOGY \"\$n\" >/dev/null
   mount \"\$n\" /mnt/nvme
   printf 'namespace 4 is %s, mounted at /mnt/nvme\n' \"\$n\"" || status=1
 run_in_guest "$fs_corpus /mnt/share/nvme_file_tests write" || status=1
-run_in_guest 'sync; umount /mnt/nvme; echo unmounted' || status=1
+#  The umount's own status, not the echo's. A swallowed failure here hands
+#  the device to another driver with the filesystem still mounted and its
+#  writes still in cache, and the phase that follows then reads a medium
+#  the kernel never finished writing.
+run_in_guest 'sync && umount /mnt/nvme && echo unmounted' || status=1
 
-give_nvme_to vfio-pci
+give_nvme_to vfio-pci || status=1
 run_in_guest "$fs_corpus /mnt/share/nvme_file_tests find" || status=1
 
-give_nvme_to nvme
+give_nvme_to nvme || status=1
 run_in_guest "$find_namespace
   mount \"\$n\" /mnt/nvme && echo remounted" || status=1
 run_in_guest "$fs_corpus /mnt/share/nvme_file_tests read" || status=1
 run_in_guest 'umount /mnt/nvme 2>/dev/null; echo done' || status=1
 
 #  Left as the other suites expect to find it.
-give_nvme_to vfio-pci
+give_nvme_to vfio-pci || status=1
 
 printf '\n== dma_region_walkthrough ==\n'
 run_in_guest /mnt/share/dma_region_walkthrough || status=1

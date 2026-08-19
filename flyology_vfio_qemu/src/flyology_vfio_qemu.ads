@@ -42,6 +42,10 @@ package Flyology_VFIO_QEMU is
    subtype U64 is Interfaces.Unsigned_64;
 
    --  A PCI address in the full domain:bus:device.function form.
+   --
+   --  A subtype rather than a type, so it costs nothing at a call site and
+   --  still says in a signature which strings are addresses. Find returns
+   --  one of these and Driver_Of takes one.
    subtype PCI_Address is String (1 .. 12);
 
    --  Raised when the harness cannot find or use a device it needs.
@@ -76,7 +80,8 @@ package Flyology_VFIO_QEMU is
    --  @return The device's address
    --  @exception Device_Not_Available No such device is bound to vfio-pci
    function Find
-     (Vendor : U16; Device : U16; Instance : Positive := 1) return String;
+     (Vendor : U16; Device : U16; Instance : Positive := 1)
+      return PCI_Address;
 
    --  How many devices of this identity are bound to vfio-pci.
    --  @param Vendor The PCI vendor identifier
@@ -93,7 +98,7 @@ package Flyology_VFIO_QEMU is
    --  Which driver holds a device, or the empty string when none does.
    --  @param Address The device's PCI address
    --  @return The driver's name, or ""
-   function Driver_Of (Address : String) return String;
+   function Driver_Of (Address : PCI_Address) return String;
 
    --  A four-digit lowercase hexadecimal rendering, for identity messages.
    --  @param Value The value to render

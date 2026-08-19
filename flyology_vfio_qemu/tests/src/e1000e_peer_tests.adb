@@ -227,7 +227,18 @@ procedure E1000E_Peer_Tests is
         (Socket, (Name => Sockets.Receive_Timeout, Timeout => 0.25));
       Sockets.Bind_Socket
         (Socket, Sockets.Network_Endpoint (Sockets.Any_IPv4, Echo_Port));
-      accept Listening;
+      --  A terminate alternative, not a plain accept. A task parked at a
+      --  plain accept ignores everything, including the stop flag: if the
+      --  main body takes a path that never makes this call — address
+      --  resolution failing, or any exception before it — the program
+      --  reports its result and then waits here for ever. The alternative
+      --  lets the task end when its master is finished and no such call can
+      --  still arrive, which is exactly the condition that used to hang.
+      select
+         accept Listening;
+      or
+         terminate;
+      end select;
 
       while not Asked loop
          begin
@@ -331,7 +342,18 @@ procedure E1000E_Peer_Tests is
       Sockets.Bind_Socket
         (Server, Sockets.Network_Endpoint (Sockets.Any_IPv4, Stream_Port));
       Sockets.Listen_Socket (Server);
-      accept Listening;
+      --  A terminate alternative, not a plain accept. A task parked at a
+      --  plain accept ignores everything, including the stop flag: if the
+      --  main body takes a path that never makes this call — address
+      --  resolution failing, or any exception before it — the program
+      --  reports its result and then waits here for ever. The alternative
+      --  lets the task end when its master is finished and no such call can
+      --  still arrive, which is exactly the condition that used to hang.
+      select
+         accept Listening;
+      or
+         terminate;
+      end select;
 
       while not Asked loop
          Sockets.Accept_Socket (Server, Accepted, From, 0.25, Status);

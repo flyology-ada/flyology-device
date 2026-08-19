@@ -64,7 +64,7 @@ package body Flyology_VFIO_QEMU is
    -- Driver_Of --
    ---------------
 
-   function Driver_Of (Address : String) return String is
+   function Driver_Of (Address : PCI_Address) return String is
       Link : constant String := Devices_Root & "/" & Address & "/driver";
    begin
       if not Ada.Directories.Exists (Link) then
@@ -229,7 +229,8 @@ package body Flyology_VFIO_QEMU is
    ----------
 
    function Find
-     (Vendor : U16; Device : U16; Instance : Positive := 1) return String
+     (Vendor : U16; Device : U16; Instance : Positive := 1)
+      return PCI_Address
    is
       Addresses : Address_List (1 .. Maximum_Instances);
       Lengths   : Length_List (1 .. Maximum_Instances);

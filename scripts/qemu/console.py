@@ -57,13 +57,33 @@ def read_until(s, pattern, timeout):
     return ANSI.sub(b"", buf), None
 
 
+PROMPT = re.compile(rb"(login:|[#$] )\s*$")
+
+
 def log_in(s):
-    """Gets the console to a shell prompt, logging in if it is at login."""
-    s.sendall(b"\n")
-    _, hit = read_until(s, re.compile(rb"(login:|[#$] )\s*$"), 20)
-    if hit and b"login:" in hit.group(0):
-        s.sendall(b"root\n")
-        read_until(s, re.compile(rb"[#$] \s*$"), 30)
+    """Gets the console to a shell prompt, interrupting whatever holds it.
+
+    Returns True when a prompt was reached.
+
+    The interrupt is the point. A command left running in the guest owns
+    this console, and a caller that sends its own command anyway is feeding
+    it to that process's stdin and will then wait the full timeout for a
+    marker that cannot arrive. One stuck command used to cost every later
+    one its whole timeout; now it costs the seconds spent getting the
+    prompt back.
+    """
+    for attempt in range(3):
+        s.sendall(b"\x03" if attempt else b"\n")
+        _, hit = read_until(s, PROMPT, 20)
+        if hit is None:
+            continue
+        if b"login:" in hit.group(0):
+            s.sendall(b"root\n")
+            _, hit = read_until(s, re.compile(rb"[#$] \s*$"), 30)
+            if hit is None:
+                continue
+        return True
+    return False
 
 
 def run(command):
@@ -74,7 +94,10 @@ def run(command):
     ).decode()
 
     s = connect(time.time() + 60)
-    log_in(s)
+    if not log_in(s):
+        print("the guest console did not come back to a prompt; something"
+              " is still running there", file=sys.stderr)
+        return 1
     s.sendall(f'eval "$(echo {payload} | base64 -d)"\n'.encode())
 
     buf, hit = read_until(s, re.compile(end.encode() + rb":(\d+)"), TIMEOUT)
@@ -91,7 +114,7 @@ def run(command):
 
 def wait_for_boot():
     s = connect(time.time() + 180)
-    _, hit = read_until(s, re.compile(rb"(login:|[#$] )\s*$"), 180)
+    _, hit = read_until(s, PROMPT, 180)
     return 0 if hit else 1
 
 

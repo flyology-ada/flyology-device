@@ -13,13 +13,19 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
    --  order they are used, with the transfer buffer taking whatever is
    --  left. Overlapping two of these is the sort of mistake that produces a
    --  controller which works until it is busy.
-   Admin_Sub_At  : constant := 0;
-   Admin_Comp_At : constant := 4096;
-   IO_Sub_At     : constant := 8192;
-   IO_Comp_At    : constant := 12288;
-   Identify_At   : constant := 16384;
-   List_At       : constant := 20480;
-   Buffer_At     : constant := 24576;
+   --  Named for what they are — offsets into the scratch area — and not
+   --  for where they end up. Two of these were once homonyms of the
+   --  Volume fields holding the device addresses derived from them, so a
+   --  dropped "Self." typechecked: the offset 24576 would have been
+   --  programmed into a command as an address, and the controller would
+   --  have written to whatever the mapping put there.
+   Admin_Sub_Offset  : constant := 0;
+   Admin_Comp_Offset : constant := 4096;
+   IO_Sub_Offset     : constant := 8192;
+   IO_Comp_Offset    : constant := 12288;
+   Identify_Offset   : constant := 16384;
+   List_Offset       : constant := 20480;
+   Buffer_Offset     : constant := 24576;
 
    function Run_Admin
      (Self : in out Volume; BAR : Regions.Window) return Completion;
@@ -159,26 +165,26 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
       Self.Status := 0;
 
       Self.Admin_Sub :=
-        (Kind => Admin, Host => At_Host (Admin_Sub_At),
-         Device => At_Device (Admin_Sub_At), Entries => Queue_Entries);
+        (Kind => Admin, Host => At_Host (Admin_Sub_Offset),
+         Device => At_Device (Admin_Sub_Offset), Entries => Queue_Entries);
       Self.Admin_Comp :=
-        (Kind => Admin, Host => At_Host (Admin_Comp_At),
-         Device => At_Device (Admin_Comp_At), Entries => Queue_Entries);
+        (Kind => Admin, Host => At_Host (Admin_Comp_Offset),
+         Device => At_Device (Admin_Comp_Offset), Entries => Queue_Entries);
       Self.IO_Sub :=
-        (Kind => Namespace_IO, Host => At_Host (IO_Sub_At),
-         Device => At_Device (IO_Sub_At), Entries => Queue_Entries);
+        (Kind => Namespace_IO, Host => At_Host (IO_Sub_Offset),
+         Device => At_Device (IO_Sub_Offset), Entries => Queue_Entries);
       Self.IO_Comp :=
-        (Kind => Namespace_IO, Host => At_Host (IO_Comp_At),
-         Device => At_Device (IO_Comp_At), Entries => Queue_Entries);
+        (Kind => Namespace_IO, Host => At_Host (IO_Comp_Offset),
+         Device => At_Device (IO_Comp_Offset), Entries => Queue_Entries);
 
-      Self.List_Host := At_Host (List_At);
-      Self.List_At := At_Device (List_At);
-      Self.Buffer_Host := At_Host (Buffer_At);
-      Self.Buffer_At := At_Device (Buffer_At);
-      Self.Buffer_Bytes := Bytes - Buffer_At;
+      Self.List_Host := At_Host (List_Offset);
+      Self.List_At := At_Device (List_Offset);
+      Self.Buffer_Host := At_Host (Buffer_Offset);
+      Self.Buffer_At := At_Device (Buffer_Offset);
+      Self.Buffer_Bytes := Bytes - Buffer_Offset;
 
       declare
-         Blank : array (1 .. Buffer_At) of U8
+         Blank : array (1 .. Buffer_Offset) of U8
            with Import, Volatile, Address => Scratch;
       begin
          --  Only the structures, not the transfer buffer: a caller may
@@ -196,15 +202,15 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
 
       Write_Identify_Command
         (Self.Admin_Sub, Self.Admin_Slot, Self.Next_ID,
-         At_Device (Identify_At));
+         At_Device (Identify_Offset));
       Demand (Self, Run_Admin (Self, BAR), "identifying the controller");
 
-      Self.Serial_Text := Padded (Identified_Serial (At_Host (Identify_At)), 20);
-      Self.Model_Text := Padded (Identified_Model (At_Host (Identify_At)), 40);
+      Self.Serial_Text := Padded (Identified_Serial (At_Host (Identify_Offset)), 20);
+      Self.Model_Text := Padded (Identified_Model (At_Host (Identify_Offset)), 40);
 
       declare
          Ceiling : constant Natural :=
-           Maximum_Transfer_Bytes (At_Host (Identify_At), Capabilities);
+           Maximum_Transfer_Bytes (At_Host (Identify_Offset), Capabilities);
          Room : constant Positive :=
            (Self.Buffer_Bytes / Self.Page_Bytes) * Self.Page_Bytes;
       begin
@@ -223,11 +229,11 @@ package body Flyology_VFIO_QEMU.NVMe.Blocks is
 
       Write_Identify_Namespace_Command
         (Self.Admin_Sub, Self.Admin_Slot, Self.Next_ID, Namespace,
-         At_Device (Identify_At));
+         At_Device (Identify_Offset));
       Demand (Self, Run_Admin (Self, BAR), "identifying the namespace");
 
-      Self.Block_Size := Namespace_Block_Bytes (At_Host (Identify_At));
-      Self.Blocks := Namespace_Blocks (At_Host (Identify_At));
+      Self.Block_Size := Namespace_Block_Bytes (At_Host (Identify_Offset));
+      Self.Blocks := Namespace_Blocks (At_Host (Identify_Offset));
 
       if Self.Blocks = 0 then
          raise Device_Misbehaved with
