@@ -33,6 +33,20 @@ package body Flyology_VFIO.DMA_Mapper is
            & " rejected until both have happened.";
       end if;
 
+      --  A mapper with mappings still live cannot be moved. Its Mappings
+      --  will unmap themselves later, and they would do it against
+      --  whichever container the mapper points at by then: the ranges the
+      --  first container is still holding would leak, and the second would
+      --  be asked to remove ranges it never made — or, since every window
+      --  in this repository starts at the same address, would remove the
+      --  ones it did.
+      if Self.Live_Mappings /= 0 then
+         raise DMA.Mapping_Error with
+           "a mapper with" & Natural'Image (Self.Live_Mappings)
+           & " live mapping(s) cannot be bound to another container; release"
+           & " them first";
+      end if;
+
       Self.Container := To.Value;
    end Bind;
 

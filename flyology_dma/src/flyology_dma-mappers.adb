@@ -59,8 +59,15 @@ package body Flyology_DMA.Mappers is
       --  gone as far as this object is concerned, and finalization must not
       --  try again with the same arguments.
       Self.Active := False;
-      Self.Through.Live := Self.Through.Live - 1;
       Self.Through.Unmap (Self.Device, Self.Extent);
+
+      --  Counted down only once the kernel has agreed. Decrementing first
+      --  would mean that a failed Unmap — the case where a device can
+      --  still reach memory this process is about to release — is also the
+      --  case where the guard against exactly that stops counting it. The
+      --  mapper would then finalize quietly, which is the wrong direction
+      --  for a failure to push a safety check.
+      Self.Through.Live := Self.Through.Live - 1;
    end Release;
 
    --------------
@@ -70,6 +77,18 @@ package body Flyology_DMA.Mappers is
    overriding procedure Finalize (Self : in out Mapping) is
    begin
       Release (Self);
+   exception
+      --  A Finalize that propagates during unwinding replaces the
+      --  exception already travelling with Program_Error, so the report of
+      --  what actually went wrong is lost and replaced by a report of the
+      --  clean-up going wrong afterwards. The count above stays up, which
+      --  is what makes the mapper's own Finalize complain, so the failure
+      --  is still heard — from the object whose invariant it is.
+      --
+      --  An explicit Release still raises. A caller who unmaps by hand
+      --  wants to be told.
+      when others =>
+         null;
    end Finalize;
 
    ---------

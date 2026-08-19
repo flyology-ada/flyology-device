@@ -463,6 +463,21 @@ begin
                end;
 
                Controller.Disable (BAR);
+            exception
+               --  Also on the way out through an exception, not only on
+               --  the way out through the end. A device is not finished
+               --  with a ring because the program that programmed it has
+               --  stopped caring: the mapping goes away as this block
+               --  unwinds, and anything still writing there writes to an
+               --  address the IOMMU no longer translates. The fault storm
+               --  that follows buries whatever raised in the first place.
+               when others =>
+                  begin
+                     Controller.Disable (BAR);
+                  exception
+                     when others => null;
+                  end;
+                  raise;
             end;
 
             Config.Disable_Bus_Mastering (Device);

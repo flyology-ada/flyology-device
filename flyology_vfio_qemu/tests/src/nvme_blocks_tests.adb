@@ -410,6 +410,20 @@ begin
                Harness.Check
                  (not Volume.Is_Open,
                   "the volume closed, and says so");
+            exception
+               --  Also on the way out through an exception. A controller
+               --  is not finished with its queues because the program that
+               --  built them has stopped caring: the mapping goes away as
+               --  this block unwinds, and anything still writing there
+               --  writes where the IOMMU no longer translates — a fault
+               --  storm that buries whatever raised.
+               when others =>
+                  begin
+                     Disk.Close (Volume, BAR);
+                  exception
+                     when others => null;
+                  end;
+                  raise;
             end;
 
             Config.Disable_Bus_Mastering (Device);
