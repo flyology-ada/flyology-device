@@ -1,3 +1,6 @@
+/.agents/
+/.claude/rules/
+/.claude/skills/
 #  Build output.
 #
 #  These are directory patterns rather than a list per crate, so a crate
@@ -26,3 +29,4 @@ docs/gnatdoc/
 *.o
 *.a
 *.dSYM/
+apm_modules/
